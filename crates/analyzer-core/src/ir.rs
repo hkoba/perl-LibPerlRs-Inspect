@@ -157,8 +157,31 @@ pub enum OpDetail {
     Pm {
         pattern: Option<String>,
     },
+    /// multideref (UNOP_AUX) のデコード結果: `$x->[0]{k}` 等の
+    /// deref チェーン
+    MultiDeref {
+        steps: Vec<DerefStep>,
+    },
     /// 未デコードの補助データ (UNOP_AUX 等) の目印
     Aux(String),
+}
+
+/// multideref の 1 ステップ。base は op.h の MDEREF アクション名に対応:
+/// padsv (ref を持つ lexical) / padav / padhv (集合 lexical 直接) /
+/// gvsv / gvav / gvhv (パッケージ変数) / chain (直前ステップの結果) /
+/// stack (先行 op の結果)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DerefStep {
+    /// "array" | "hash"
+    pub container: String,
+    pub base: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub base_targ: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub base_name: Option<String>,
+    /// 添字/キー (const は値、padsv は変数名、gvsv は $名前。動的は None)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub key: Option<String>,
 }
 
 impl OpDetail {

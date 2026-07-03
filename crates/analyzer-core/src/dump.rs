@@ -87,6 +87,24 @@ fn rec(node: &OpNode, depth: usize, ir: &SubIr, out: &mut String) {
             " pm={}",
             pattern.as_deref().unwrap_or("<undecoded>")
         )),
+        OpDetail::MultiDeref { steps } => {
+            out.push_str(" mderef=");
+            for s in steps {
+                out.push_str(&format!(
+                    "{}({}{}){}",
+                    if s.container == "array" { "A" } else { "H" },
+                    s.base,
+                    s.base_targ
+                        .map(|t| format!(":{}", t))
+                        .or_else(|| s.base_name.clone().map(|n| format!(":{}", n)))
+                        .unwrap_or_default(),
+                    s.key
+                        .as_deref()
+                        .map(|k| format!("[{}]", k))
+                        .unwrap_or_else(|| "[?]".into()),
+                ));
+            }
+        }
         OpDetail::Aux(s) => out.push_str(&format!(" aux={}", s)),
     }
     out.push('\n');

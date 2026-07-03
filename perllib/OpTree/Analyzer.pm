@@ -9,19 +9,23 @@ XSLoader::load('OpTree::Analyzer', $VERSION);
 
 require JSON::PP;
 
+# XS 側の String 返却は UTF8 フラグ付きの文字列 (バイト列ではない) なので
+# decode_json ではなく文字列モードの decode を使う
+my $_json = JSON::PP->new;
+
 sub op_names {
     my ($code) = @_;
-    JSON::PP::decode_json(op_names_json($code));
+    $_json->decode(op_names_json($code));
 }
 
 sub capture {
     my ($code) = @_;
-    JSON::PP::decode_json(capture_json($code));
+    $_json->decode(capture_json($code));
 }
 
 sub analyze {
     my ($code) = @_;
-    JSON::PP::decode_json(analyze_json($code));
+    $_json->decode(analyze_json($code));
 }
 
 1;

@@ -16,6 +16,7 @@ our @FIXTURES = (
     [eval_die     => 'sub { my ($x) = @_; eval { die "boom\n" if $x }; $@ }'],
     [method_call  => 'sub { my ($obj) = @_; $obj->frobnicate(1, 2) }'],
     [closure      => 'sub { my $c = 0; sub { $c++ } }'],
+    [deref_chain  => 'sub { my ($x, $i) = @_; $x->[0]{k} + $x->{h}[$i] }'],
 );
 
 sub compile {

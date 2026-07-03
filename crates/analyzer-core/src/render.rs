@@ -96,6 +96,10 @@ pub fn render(ir: &SubIr, node: &OpNode) -> String {
             OpDetail::Method { name: Some(m) } => m.clone(),
             _ => "<method>".into(),
         },
+        "multideref" => match &n.detail {
+            OpDetail::MultiDeref { steps } => render_mderef(ir, steps),
+            _ => "<multideref>".into(),
+        },
         "stringify" => format!("\"{}\"", kid_list(ir, n).join("")),
         "list" | "pushmark" => kid_list(ir, n).join(", "),
         "undef" if n.kids.is_empty() => "undef".into(),
@@ -165,6 +169,57 @@ fn kid_list(ir: &SubIr, n: &OpNode) -> Vec<String> {
         .filter(|k| k.name != "pushmark")
         .map(|k| render(ir, k))
         .collect()
+}
+
+/// multideref チェーンの描画: `$x->[0]{k}` / `$arr[0]` / `$h{k}` 等
+pub(crate) fn render_mderef(ir: &SubIr, steps: &[crate::ir::DerefStep]) -> String {
+    let mut out = String::new();
+    for (i, s) in steps.iter().enumerate() {
+        let subscript = |k: &Option<String>| -> String {
+            let key = k.as_deref().unwrap_or("?");
+            if s.container == "array" {
+                format!("[{}]", key)
+            } else {
+                format!("{{{}}}", key)
+            }
+        };
+        match s.base.as_str() {
+            "padsv" => {
+                // $x->[...] : ref を持つ lexical の deref
+                let name = s
+                    .base_targ
+                    .and_then(|t| ir.pad_name(t).map(String::from))
+                    .unwrap_or_else(|| "$?".into());
+                out.push_str(&format!("{}->{}", name, subscript(&s.key)));
+            }
+            "padav" | "padhv" => {
+                // $arr[...] / $h{...} : 集合 lexical の要素直接アクセス
+                let name = s
+                    .base_targ
+                    .and_then(|t| ir.pad_name(t).map(String::from))
+                    .unwrap_or_else(|| "?".into());
+                out.push_str(&format!("${}{}", &name[1..], subscript(&s.key)));
+            }
+            "gvsv" => out.push_str(&format!(
+                "${}->{}",
+                s.base_name.as_deref().unwrap_or("?"),
+                subscript(&s.key)
+            )),
+            "gvav" | "gvhv" => out.push_str(&format!(
+                "${}{}",
+                s.base_name.as_deref().unwrap_or("?"),
+                subscript(&s.key)
+            )),
+            // chain: 直前ステップの結果への添字 (arrow 省略記法)
+            "chain" if i > 0 => out.push_str(&subscript(&s.key)),
+            _ => out.push_str(&format!("<expr>{}", subscript(&s.key))),
+        }
+    }
+    if out.is_empty() {
+        "<multideref>".into()
+    } else {
+        out
+    }
 }
 
 /// entersub の描画: `f(args)` / `$obj->meth(args)`

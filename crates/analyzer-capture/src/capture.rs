@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use analyzer_core::ir::{OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
+use analyzer_core::ir::{DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
 use libperl_rs::Perl;
 use libperl_sys::{
     OPclass, OPf_KIDS, Perl_op_class, PerlInterpreter, SV, cop, methop, op, padop, sv, svop,
@@ -233,12 +233,152 @@ impl Capturer {
                     }
                     // pp_argelem は op_aux ポインタの値そのものを添字に使う
                     "argelem" => OpDetail::ArgElem { index: aux as u64 },
-                    // multideref 等は未デコード (op 名を目印に残す)
+                    "multideref" => self.decode_multideref(aux),
+                    // multiconcat 等は未デコード (op 名を目印に残す)
                     other => OpDetail::Aux(other.to_string()),
                 }
             }
             _ => OpDetail::None,
         }
+    }
+
+    /// multideref の aux 配列をデコードする。
+    ///
+    /// 形式は op.h (5.22 以降安定): 先頭アイテムが actions ワードで、
+    /// 7 bit ごとに 1 アクション。各アクションは低 4 bit が base 種別、
+    /// 0x30 が添字種別、0x40 が最終要素フラグ。base/添字の種別に応じて
+    /// 後続アイテム (pad_offset / sv / iv) を消費する。
+    /// MDEREF_* 定数は bindgen allowlist 対象外のためここにミラーする
+    /// (libperl-sys への allowlist 追加候補)。
+    fn decode_multideref(&self, aux: *mut libperl_sys::UNOP_AUX_item) -> OpDetail {
+        const MDEREF_ACTION_MASK: u64 = 0xf;
+        const MDEREF_INDEX_MASK: u64 = 0x30;
+        const MDEREF_INDEX_CONST: u64 = 0x10;
+        const MDEREF_INDEX_PADSV: u64 = 0x20;
+        const MDEREF_INDEX_GVSV: u64 = 0x30;
+        const MDEREF_FLAG_LAST: u64 = 0x40;
+        const MDEREF_SHIFT: u32 = 7;
+
+        if aux.is_null() {
+            return OpDetail::Aux("multideref".into());
+        }
+        let mut steps: Vec<DerefStep> = Vec::new();
+        unsafe {
+            let mut items = aux;
+            let mut actions = (*items).uv;
+            // 暴走防止 (実際のチェーンは高々数段)
+            while steps.len() < 64 {
+                let kind = actions & MDEREF_ACTION_MASK;
+                if kind == 0 {
+                    // MDEREF_reload: 次のアイテムが新しい actions ワード
+                    items = items.add(1);
+                    actions = (*items).uv;
+                    if actions == 0 {
+                        break;
+                    }
+                    continue;
+                }
+                let (container, base) = match kind {
+                    1 => ("array", "stack"),
+                    2 => ("array", "gvsv"),
+                    3 => ("array", "padsv"),
+                    4 => ("array", "chain"),
+                    5 => ("array", "padav"),
+                    6 => ("array", "gvav"),
+                    8 => ("hash", "stack"),
+                    9 => ("hash", "gvsv"),
+                    10 => ("hash", "padsv"),
+                    11 => ("hash", "chain"),
+                    12 => ("hash", "padhv"),
+                    13 => ("hash", "gvhv"),
+                    // 未知のアクション: 以降のアイテム境界が分からないので
+                    // 打ち切り、デコード済みぶんだけ返す
+                    _ => break,
+                };
+                let (base_targ, base_name) = match base {
+                    "padsv" | "padav" | "padhv" => {
+                        items = items.add(1);
+                        (Some((*items).pad_offset as u64), None)
+                    }
+                    "gvsv" | "gvav" | "gvhv" => {
+                        items = items.add(1);
+                        let name = match sv_lit(self.aux_item_sv(items)) {
+                            SvLit::Glob { name, stash } => match stash.as_deref() {
+                                Some("main") | None => Some(name),
+                                Some(pkg) => Some(format!("{}::{}", pkg, name)),
+                            },
+                            _ => None,
+                        };
+                        (None, name)
+                    }
+                    _ => (None, None),
+                };
+                let key = match actions & MDEREF_INDEX_MASK {
+                    MDEREF_INDEX_CONST => {
+                        items = items.add(1);
+                        if container == "array" {
+                            Some((*items).iv.to_string())
+                        } else {
+                            match sv_lit(self.aux_item_sv(items)) {
+                                SvLit::Pv(s) => Some(s),
+                                SvLit::Iv(i) => Some(i.to_string()),
+                                SvLit::Uv(u) => Some(u.to_string()),
+                                _ => None,
+                            }
+                        }
+                    }
+                    MDEREF_INDEX_PADSV => {
+                        items = items.add(1);
+                        let po = (*items).pad_offset as u64;
+                        Some(
+                            self.pad_name_at(po)
+                                .unwrap_or_else(|| format!("$pad{}", po)),
+                        )
+                    }
+                    MDEREF_INDEX_GVSV => {
+                        items = items.add(1);
+                        match sv_lit(self.aux_item_sv(items)) {
+                            SvLit::Glob { name, .. } => Some(format!("${}", name)),
+                            _ => None,
+                        }
+                    }
+                    _ => None, // INDEX_none: 添字は先行 op が計算
+                };
+                steps.push(DerefStep {
+                    container: container.into(),
+                    base: base.into(),
+                    base_targ,
+                    base_name,
+                    key,
+                });
+                if actions & MDEREF_FLAG_LAST != 0 {
+                    break;
+                }
+                actions >>= MDEREF_SHIFT;
+            }
+        }
+        OpDetail::MultiDeref { steps }
+    }
+
+    /// UNOP_AUX アイテムから SV を取り出す。ithreads では SV アイテムは
+    /// pad オフセットとして格納される (perl.h の UNOP_AUX_item_sv マクロ:
+    /// `PAD_SVl((item)->pad_offset)`)。本プロジェクトは threaded perl
+    /// 前提 (非 threaded では (*item).sv を直接読む形になる)
+    unsafe fn aux_item_sv(&self, item: *const libperl_sys::UNOP_AUX_item) -> *const sv {
+        PAD_BASE_SV(CvPADLIST(self.cv), unsafe { (*item).pad_offset })
+    }
+
+    /// pad index から変数名を引く (multideref の padsv 添字表示用)
+    fn pad_name_at(&self, po: u64) -> Option<String> {
+        let pnl = padlist_names(CvPADLIST(self.cv));
+        if pnl.is_null() || po as isize > padnamelist_max(pnl) {
+            return None;
+        }
+        let pn = padnamelist_nth(pnl, po as usize);
+        if pn.is_null() {
+            return None;
+        }
+        PadnamePV(pn).filter(|s| !s.is_empty())
     }
 
     /// pass 2: 生ポインタをノード id に解決
