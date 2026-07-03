@@ -1,6 +1,7 @@
 //! 解析パス群。すべて SubIr (所有型 IR) 上で動く純 Rust コード。
 
 pub mod argspec;
+pub mod logic;
 pub mod retspec;
 
 use serde::{Deserialize, Serialize};
@@ -11,12 +12,14 @@ use crate::ir::{OpNode, SubIr};
 pub struct AnalysisReport {
     pub args: argspec::ArgSpec,
     pub returns: retspec::RetSpec,
+    pub logic: logic::LogicSpec,
 }
 
 pub fn analyze(ir: &SubIr) -> AnalysisReport {
     AnalysisReport {
         args: argspec::analyze_args(ir),
         returns: retspec::analyze_returns(ir),
+        logic: logic::analyze_logic(ir),
     }
 }
 

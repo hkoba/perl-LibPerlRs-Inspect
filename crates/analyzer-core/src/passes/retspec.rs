@@ -96,7 +96,7 @@ pub fn analyze_returns(ir: &SubIr) -> RetSpec {
 }
 
 /// return / die (LISTOP) の pushmark 以外の子を描画
-fn return_exprs(ir: &SubIr, n: &OpNode) -> Vec<String> {
+pub(crate) fn return_exprs(ir: &SubIr, n: &OpNode) -> Vec<String> {
     n.kids
         .iter()
         .map(|k| k.skip_null())
@@ -106,7 +106,7 @@ fn return_exprs(ir: &SubIr, n: &OpNode) -> Vec<String> {
 }
 
 /// entersub が croak/confess (Carp) 呼び出しなら (via, message) を返す
-fn croak_call(ir: &SubIr, n: &OpNode) -> Option<(String, Option<String>)> {
+pub(crate) fn croak_call(ir: &SubIr, n: &OpNode) -> Option<(String, Option<String>)> {
     let mut via: Option<String> = None;
     let mut args: Vec<String> = Vec::new();
 
