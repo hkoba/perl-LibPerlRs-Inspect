@@ -5,8 +5,3 @@ members = [
     "crates/analyzer-capture",
     "crates/analyzer-xs",
 ]
-
-# glibc の C23 const-generic (_Generic) 対応が入った macrogen を使う。
-# 対応が crates.io に 0.1.6 として release されたらこの patch は外せる。
-[patch.crates-io]
-libperl-macrogen = { path = "../exp-rstinycc-take2" }
