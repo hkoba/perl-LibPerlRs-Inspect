@@ -23,10 +23,8 @@ sub capture {
     $_json->decode(capture_json($code));
 }
 
-sub analyze {
-    my ($code) = @_;
-    $_json->decode(analyze_json($code));
-}
+# analyze() は XS 側がネイティブの hashref を直接返す (JSON 経由なし)。
+# JSON 文字列が欲しい場合は analyze_json() を使う。
 
 1;
 __END__

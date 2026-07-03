@@ -23,11 +23,12 @@ ok +(grep { $_ eq 'multiply' } @$names2), 'named sub contains multiply'
     or diag explain $names2;
 
 # Error cases must croak, not crash.
+# (メッセージは #[xs_sub] の Cv 引数種別トランポリンが出す)
 eval { OpTree::Analyzer::op_names_json(42) };
-like $@, qr/not a reference/, 'croaks on non-ref';
+like $@, qr/must be a CODE reference/, 'croaks on non-ref';
 
 eval { OpTree::Analyzer::op_names_json([]) };
-like $@, qr/not a CODE reference/, 'croaks on non-code ref';
+like $@, qr/must be a CODE reference/, 'croaks on non-code ref';
 
 eval { OpTree::Analyzer::op_names_json(\&utf8::is_utf8) };
 like $@, qr/XSUB/, 'croaks on XSUB';

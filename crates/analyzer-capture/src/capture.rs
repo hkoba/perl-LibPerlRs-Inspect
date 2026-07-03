@@ -6,18 +6,17 @@
 use std::collections::HashMap;
 
 use analyzer_core::ir::{DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
-use libperl_rs::Perl;
+use libperl_rs::{Cv, Perl};
 use libperl_sys::{
-    OPclass, OPf_KIDS, Perl_op_class, PerlInterpreter, SV, cop, methop, op, padop, sv, svop,
+    OPclass, OPf_KIDS, Perl_op_class, PerlInterpreter, cop, methop, op, padop, sv, svop,
     svtype,
 };
 
 use crate::raw::*;
 
 /// 実行順 (CvSTART → op_next) の op 名リスト。M0 の op_names の実体。
-pub fn exec_op_names(code: *const SV) -> Result<Vec<String>, String> {
-    let cv = coderef_to_cv(code)?;
-    let start = CvSTART(cv);
+pub fn exec_op_names(cv: Cv) -> Result<Vec<String>, String> {
+    let start = cv.start();
     if start.is_null() {
         return Err("cannot analyze an XSUB (no op tree)".into());
     }
@@ -25,15 +24,17 @@ pub fn exec_op_names(code: *const SV) -> Result<Vec<String>, String> {
 }
 
 /// coderef の OP ツリー全体を SubIr に写し取る
-pub fn capture_sub(perl: &Perl, code: *const SV) -> Result<SubIr, String> {
-    let cv = coderef_to_cv(code)?;
-    if CvISXSUB(cv) {
+pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
+    if cv.is_xsub() {
         return Err("cannot analyze an XSUB (no op tree)".into());
     }
-    let root = CvROOT(cv);
+    let root = cv.root();
     if root.is_null() {
         return Err("subroutine has no op tree".into());
     }
+    let file = cv.file();
+    let proto = cv.proto();
+    let cv = cv.as_ptr() as *const libperl_sys::cv;
 
     let mut cap = Capturer {
         my_perl: perl.as_ptr(),
@@ -47,13 +48,13 @@ pub fn capture_sub(perl: &Perl, code: *const SV) -> Result<SubIr, String> {
     cap.resolve(&mut root_node);
 
     Ok(SubIr {
-        file: CvFILE(cv),
+        file,
         lines: if cap.max_line > 0 && cap.min_line <= cap.max_line {
             Some((cap.min_line, cap.max_line))
         } else {
             None
         },
-        proto: None,
+        proto,
         pad: capture_pad(cv),
         start_id: cap.lookup(CvSTART(cv)),
         root: root_node,
@@ -206,16 +207,7 @@ impl Capturer {
                 let aux = unsafe { (*(o as *const libperl_sys::unop_aux)).op_aux };
                 match op_name_of_type(ty).as_str() {
                     "argcheck" => {
-                        // struct op_argcheck_aux (op.h) は bindgen 未生成のため
-                        // 5.42 のレイアウトをミラー (libperl-sys の allowlist
-                        // 追加候補)
-                        #[repr(C)]
-                        struct OpArgcheckAux {
-                            params: u64,
-                            opt_params: u64,
-                            slurpy: std::os::raw::c_char,
-                        }
-                        let a = aux as *const OpArgcheckAux;
+                        let a = aux as *const libperl_sys::op_argcheck_aux;
                         if a.is_null() {
                             OpDetail::Aux("argcheck".into())
                         } else {
@@ -248,16 +240,15 @@ impl Capturer {
     /// 7 bit ごとに 1 アクション。各アクションは低 4 bit が base 種別、
     /// 0x30 が添字種別、0x40 が最終要素フラグ。base/添字の種別に応じて
     /// 後続アイテム (pad_offset / sv / iv) を消費する。
-    /// MDEREF_* 定数は bindgen allowlist 対象外のためここにミラーする
-    /// (libperl-sys への allowlist 追加候補)。
     fn decode_multideref(&self, aux: *mut libperl_sys::UNOP_AUX_item) -> OpDetail {
-        const MDEREF_ACTION_MASK: u64 = 0xf;
-        const MDEREF_INDEX_MASK: u64 = 0x30;
-        const MDEREF_INDEX_CONST: u64 = 0x10;
-        const MDEREF_INDEX_PADSV: u64 = 0x20;
-        const MDEREF_INDEX_GVSV: u64 = 0x30;
-        const MDEREF_FLAG_LAST: u64 = 0x40;
-        const MDEREF_SHIFT: u32 = 7;
+        // libperl-sys 生成の MDEREF_* (u32) を actions (UV=u64) 幅に合わせる
+        const MDEREF_ACTION_MASK: u64 = libperl_sys::MDEREF_ACTION_MASK as u64;
+        const MDEREF_INDEX_MASK: u64 = libperl_sys::MDEREF_INDEX_MASK as u64;
+        const MDEREF_INDEX_CONST: u64 = libperl_sys::MDEREF_INDEX_const as u64;
+        const MDEREF_INDEX_PADSV: u64 = libperl_sys::MDEREF_INDEX_padsv as u64;
+        const MDEREF_INDEX_GVSV: u64 = libperl_sys::MDEREF_INDEX_gvsv as u64;
+        const MDEREF_FLAG_LAST: u64 = libperl_sys::MDEREF_FLAG_last as u64;
+        const MDEREF_SHIFT: u32 = libperl_sys::MDEREF_SHIFT;
 
         if aux.is_null() {
             return OpDetail::Aux("multideref".into());

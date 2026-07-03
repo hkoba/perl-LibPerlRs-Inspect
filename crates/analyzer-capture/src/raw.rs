@@ -51,22 +51,9 @@ pub fn SvRV(sv: *const sv) -> *const sv {
     }
 }
 
-/// Perl レベルの coderef SV を CV に deref する
-pub fn coderef_to_cv(sv: *const sv) -> Result<*const cv, String> {
-    if sv.is_null() {
-        return Err("not a CODE reference (undef)".into());
-    }
-    let rv = SvRV(sv);
-    if rv.is_null() {
-        return Err("not a reference".into());
-    }
-    if SvTYPE(rv) != svtype::SVt_PVCV {
-        return Err("not a CODE reference".into());
-    }
-    Ok(rv as *const cv)
-}
-
 // ---- CV ----
+// (coderef → CV の deref は libperl_rs::Cv::from_coderef / #[xs_sub] の
+//  Cv 引数種別へ upstream 済み)
 
 pub fn CvISXSUB(cv: *const cv) -> bool {
     unsafe { sys::CvISXSUB(cv) != 0 }
