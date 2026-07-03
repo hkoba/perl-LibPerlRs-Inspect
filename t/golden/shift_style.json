@@ -1,0 +1,190 @@
+{
+   "file" : "(eval)",
+   "lines" : [
+      1,
+      1
+   ],
+   "pad" : [
+      {
+         "flags" : 0,
+         "ix" : 1,
+         "name" : "$self"
+      },
+      {
+         "flags" : 0,
+         "ix" : 2,
+         "name" : "$n"
+      }
+   ],
+   "proto" : null,
+   "root" : {
+      "class" : "UNOP",
+      "flags" : 4,
+      "id" : 0,
+      "kids" : [
+         {
+            "class" : "LISTOP",
+            "flags" : 12,
+            "id" : 1,
+            "kids" : [
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 1
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 2,
+                  "name" : "nextstate",
+                  "next" : 4,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "UNOP",
+                  "flags" : 69,
+                  "id" : 3,
+                  "kids" : [
+                     {
+                        "class" : "OP",
+                        "flags" : 130,
+                        "id" : 4,
+                        "name" : "shift",
+                        "next" : 3,
+                        "op_type" : 169,
+                        "private" : 0,
+                        "targ" : 0
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 178,
+                        "id" : 5,
+                        "name" : "null",
+                        "next" : 3,
+                        "op_type" : 0,
+                        "private" : 128,
+                        "targ" : 9,
+                        "was" : "padsv"
+                     }
+                  ],
+                  "name" : "padsv_store",
+                  "next" : 6,
+                  "op_type" : 10,
+                  "private" : 128,
+                  "targ" : 1
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 1
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 6,
+                  "name" : "nextstate",
+                  "next" : 8,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "UNOP",
+                  "flags" : 69,
+                  "id" : 7,
+                  "kids" : [
+                     {
+                        "class" : "OP",
+                        "flags" : 130,
+                        "id" : 8,
+                        "name" : "shift",
+                        "next" : 7,
+                        "op_type" : 169,
+                        "private" : 0,
+                        "targ" : 0
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 178,
+                        "id" : 9,
+                        "name" : "null",
+                        "next" : 7,
+                        "op_type" : 0,
+                        "private" : 128,
+                        "targ" : 9,
+                        "was" : "padsv"
+                     }
+                  ],
+                  "name" : "padsv_store",
+                  "next" : 10,
+                  "op_type" : 10,
+                  "private" : 128,
+                  "targ" : 2
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 1
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 10,
+                  "name" : "nextstate",
+                  "next" : 12,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "BINOP",
+                  "flags" : 6,
+                  "id" : 11,
+                  "kids" : [
+                     {
+                        "class" : "OP",
+                        "flags" : 2,
+                        "id" : 12,
+                        "name" : "padsv",
+                        "next" : 13,
+                        "op_type" : 9,
+                        "private" : 0,
+                        "targ" : 1
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 2,
+                        "id" : 13,
+                        "name" : "padsv",
+                        "next" : 11,
+                        "op_type" : 9,
+                        "private" : 0,
+                        "targ" : 2
+                     }
+                  ],
+                  "name" : "add",
+                  "next" : 0,
+                  "op_type" : 63,
+                  "private" : 2,
+                  "targ" : 3
+               }
+            ],
+            "name" : "lineseq",
+            "next" : 0,
+            "op_type" : 201,
+            "private" : 0,
+            "targ" : 0
+         }
+      ],
+      "name" : "leavesub",
+      "op_type" : 192,
+      "private" : 65,
+      "targ" : 1
+   },
+   "start_id" : 2
+}

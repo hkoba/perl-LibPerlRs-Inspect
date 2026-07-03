@@ -1,0 +1,28 @@
+package Fixtures;
+use strict;
+use warnings;
+
+# 全テストで共有するフィクスチャ (名前 => eval するソース文字列)。
+# 主用途 (eval が返す anonymous sub の解析) に合わせ、常に eval 経由で
+# コンパイルする。
+our @FIXTURES = (
+    [empty        => 'sub {}'],
+    [shift_style  => 'sub { my $self = shift; my $n = shift; $self + $n }'],
+    [unpack_args  => 'sub { my ($x, $y) = @_; $x * $y }'],
+    [signature    => 'use v5.36; sub ($x, $y = 5, @rest) { $x + $y }'],
+    [branches     => 'sub { my ($v) = @_; return unless $v; if ($v > 10) { "big" } elsif ($v > 5) { "mid" } else { "small" } }'],
+    [ternary      => 'sub { my ($x) = @_; $x ? "yes" : "no" }'],
+    [foreach_loop => 'sub { my $sum = 0; $sum += $_ for @_; $sum }'],
+    [eval_die     => 'sub { my ($x) = @_; eval { die "boom\n" if $x }; $@ }'],
+    [method_call  => 'sub { my ($obj) = @_; $obj->frobnicate(1, 2) }'],
+    [closure      => 'sub { my $c = 0; sub { $c++ } }'],
+);
+
+sub compile {
+    my ($name, $src) = @_;
+    my $code = eval $src;
+    die "fixture $name failed to compile: $@" if $@ or ref $code ne 'CODE';
+    $code;
+}
+
+1;
