@@ -19,6 +19,11 @@ sub capture {
     JSON::PP::decode_json(capture_json($code));
 }
 
+sub analyze {
+    my ($code) = @_;
+    JSON::PP::decode_json(analyze_json($code));
+}
+
 1;
 __END__
 

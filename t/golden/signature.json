@@ -61,7 +61,11 @@
                            {
                               "class" : "UNOP_AUX",
                               "detail" : {
-                                 "Aux" : "undecoded"
+                                 "ArgCheck" : {
+                                    "opt" : 1,
+                                    "params" : 2,
+                                    "slurpy" : "@"
+                                 }
                               },
                               "flags" : 1,
                               "id" : 5,
@@ -90,7 +94,9 @@
                            {
                               "class" : "UNOP_AUX",
                               "detail" : {
-                                 "Aux" : "undecoded"
+                                 "ArgElem" : {
+                                    "index" : 0
+                                 }
                               },
                               "flags" : 1,
                               "id" : 7,
@@ -119,7 +125,9 @@
                            {
                               "class" : "UNOP_AUX",
                               "detail" : {
-                                 "Aux" : "undecoded"
+                                 "ArgElem" : {
+                                    "index" : 1
+                                 }
                               },
                               "flags" : 69,
                               "id" : 9,
@@ -178,7 +186,9 @@
                            {
                               "class" : "UNOP_AUX",
                               "detail" : {
-                                 "Aux" : "undecoded"
+                                 "ArgElem" : {
+                                    "index" : 2
+                                 }
                               },
                               "flags" : 1,
                               "id" : 13,

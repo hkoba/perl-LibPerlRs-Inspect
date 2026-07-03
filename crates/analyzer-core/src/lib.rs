@@ -5,3 +5,5 @@
 
 pub mod dump;
 pub mod ir;
+pub mod passes;
+pub mod render;

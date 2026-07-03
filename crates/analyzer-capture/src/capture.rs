@@ -118,7 +118,7 @@ impl Capturer {
             None
         };
 
-        let detail = self.extract_detail(o, cls, flags);
+        let detail = self.extract_detail(o, ty, cls, flags);
 
         let mut kids = Vec::new();
         if (flags as u32 & OPf_KIDS) != 0 {
@@ -145,7 +145,7 @@ impl Capturer {
         }
     }
 
-    fn extract_detail(&mut self, o: *const op, cls: OPclass, flags: u8) -> OpDetail {
+    fn extract_detail(&mut self, o: *const op, ty: u16, cls: OPclass, flags: u8) -> OpDetail {
         match cls {
             OPclass::OPclass_COP => {
                 let c = o as *const cop;
@@ -202,7 +202,41 @@ impl Capturer {
                 last: None,
             }, // pass 2 で解決
             OPclass::OPclass_PMOP => OpDetail::Pm { pattern: None },
-            OPclass::OPclass_UNOP_AUX => OpDetail::Aux("undecoded".into()),
+            OPclass::OPclass_UNOP_AUX => {
+                let aux = unsafe { (*(o as *const libperl_sys::unop_aux)).op_aux };
+                match op_name_of_type(ty).as_str() {
+                    "argcheck" => {
+                        // struct op_argcheck_aux (op.h) は bindgen 未生成のため
+                        // 5.42 のレイアウトをミラー (libperl-sys の allowlist
+                        // 追加候補)
+                        #[repr(C)]
+                        struct OpArgcheckAux {
+                            params: u64,
+                            opt_params: u64,
+                            slurpy: std::os::raw::c_char,
+                        }
+                        let a = aux as *const OpArgcheckAux;
+                        if a.is_null() {
+                            OpDetail::Aux("argcheck".into())
+                        } else {
+                            let slurpy = unsafe { (*a).slurpy } as u8;
+                            OpDetail::ArgCheck {
+                                params: unsafe { (*a).params },
+                                opt: unsafe { (*a).opt_params },
+                                slurpy: if slurpy == 0 {
+                                    None
+                                } else {
+                                    Some(slurpy as char)
+                                },
+                            }
+                        }
+                    }
+                    // pp_argelem は op_aux ポインタの値そのものを添字に使う
+                    "argelem" => OpDetail::ArgElem { index: aux as u64 },
+                    // multideref 等は未デコード (op 名を目印に残す)
+                    other => OpDetail::Aux(other.to_string()),
+                }
+            }
             _ => OpDetail::None,
         }
     }

@@ -30,7 +30,16 @@ fn dump_optree(my_perl: &Perl, code: *mut SV) -> Result<String, String> {
     Ok(analyzer_core::dump::dump(&ir))
 }
 
+/// `OpTree::Analyzer::analyze_json($coderef)` — analysis report
+/// (argument spec, return/exception spec; grows per milestone), as JSON.
+#[xs_sub]
+fn analyze_json(my_perl: &Perl, code: *mut SV) -> Result<String, String> {
+    let ir = analyzer_capture::capture_sub(my_perl, code)?;
+    let report = analyzer_core::passes::analyze(&ir);
+    serde_json::to_string(&report).map_err(|e| e.to_string())
+}
+
 xs_boot! {
     package = "OpTree::Analyzer";
-    subs = [op_names_json, capture_json, dump_optree];
+    subs = [op_names_json, capture_json, dump_optree, analyze_json];
 }
