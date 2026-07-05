@@ -68,18 +68,6 @@ pub fn CvSTART(cv: *const cv) -> *const op {
     }
 }
 
-pub fn CvROOT(cv: *const cv) -> *const op {
-    if CvISXSUB(cv) {
-        std::ptr::null()
-    } else {
-        unsafe { sys::CvROOT(cv) }
-    }
-}
-
-pub fn CvFILE(cv: *const cv) -> Option<String> {
-    cstr_opt(unsafe { sys::CvFILE(cv) })
-}
-
 pub fn CvPADLIST(cv: *const cv) -> *const PADLIST {
     if CvISXSUB(cv) {
         std::ptr::null()
