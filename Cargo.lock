@@ -545,6 +545,8 @@ dependencies = [
 [[package]]
 name = "libperl-config"
 version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "321f0e55989d5fe50e9cc2e3c729b151155d1ad39e8b7a677850ecee7c13a7eb"
 dependencies = [
  "chrono",
  "regex",
@@ -570,7 +572,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-macros"
-version = "0.4.0"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c662640c25cad535caeaee457ee07e22b4f80524817bf80e311c3adbccdd4390"
 dependencies = [
  "libperl-config",
  "proc-macro2",
@@ -580,7 +584,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-rs"
-version = "0.4.0"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a9a63f4648f97589fff0a7f313bc4df6d35d442f0aa8baef93b4534cd0eff5"
 dependencies = [
  "libperl-config",
  "libperl-macros",
@@ -589,7 +595,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-sys"
-version = "0.4.0"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91ee4c75db714d3632616b075357d62087360df19226d005e07152b62edba484"
 dependencies = [
  "bindgen",
  "libc",

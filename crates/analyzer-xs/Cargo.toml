@@ -11,8 +11,8 @@ crate-type = ["cdylib"]
 [dependencies]
 analyzer-core = { path = "../analyzer-core" }
 analyzer-capture = { path = "../analyzer-capture" }
-libperl-rs = { path = "../../../libperl-rs" }
+libperl-rs = "0.4.1"
 serde_json = "1"
 
 [build-dependencies]
-libperl-config = { path = "../../../libperl-rs/libperl-config" }
+libperl-config = "0.3.2"

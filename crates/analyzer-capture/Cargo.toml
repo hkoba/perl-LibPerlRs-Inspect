@@ -7,5 +7,5 @@ publish = false
 
 [dependencies]
 analyzer-core = { path = "../analyzer-core" }
-libperl-rs = { path = "../../../libperl-rs" }
-libperl-sys = { path = "../../../libperl-rs/libperl-sys" }
+libperl-rs = "0.4.1"
+libperl-sys = "0.4.1"
