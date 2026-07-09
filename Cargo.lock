@@ -544,9 +544,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-config"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "321f0e55989d5fe50e9cc2e3c729b151155d1ad39e8b7a677850ecee7c13a7eb"
+checksum = "7aa5d1a9e95bac324e5efc2a7324968079a6040ba60064ddfec1fb658891169b"
 dependencies = [
  "chrono",
  "regex",
