@@ -56,6 +56,11 @@ The Rust parts are built with `cargo --locked` against the bundled
 `Makefile.PL` (the `PERL` environment variable is passed down to the
 cargo build scripts).
 
+`make install` only copies the staged files out of `blib/` — it never
+invokes cargo, so `sudo make install` runs no build as root. Build and
+test as a normal user first (`make && make test`); `make install`
+refuses to run if nothing is staged or if `blib/` holds a debug build.
+
 ### Offline builds
 
 Vendor the Rust dependencies once while online, then point cargo at the
@@ -75,11 +80,17 @@ $ perl Makefile.PL && make CARGO_BUILD_FLAGS='--locked --offline'
 ## Development
 
 ```console
-$ perl Makefile.PL --debug      # dev profile: much faster cargo builds
-$ make test
+$ perl Makefile.PL
+$ make debug                    # dev profile: much faster cargo builds
+$ prove -b t/
 $ ./test.zsh                    # the same, as a one-shot wrapper
-$ UPDATE_GOLDEN=1 make test     # regenerate t/golden/*.json snapshots
+$ UPDATE_GOLDEN=1 prove -b t/   # regenerate t/golden/*.json snapshots
 ```
+
+Plain `make` (and `make test`) always builds the release profile;
+`make debug` stages a dev-profile build into `blib/` for fast
+iteration. Run plain `make` again before `make install` — the install
+guard rejects a debug-staged `blib/`.
 
 `make realclean` also runs `cargo clean`. If you switch to a different
 perl, run `cargo clean` manually once (stale bindgen output is not yet
