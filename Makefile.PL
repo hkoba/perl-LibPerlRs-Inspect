@@ -121,8 +121,9 @@ blib_ready ::
 
 .PHONY: cargo_build debug blib_ready
 
-# clean では cargo clean しない (bindgen/macrogen の再生成が高コスト)
-realclean ::
+# clean で target/ ごと削除 (realclean :: clean 依存なので realclean も同様)。
+# 次のビルドは bindgen/macrogen 込みのフルビルドになる点に注意。
+clean ::
 	$(CARGO) clean
 POSTAMBLE
 }

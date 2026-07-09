@@ -92,9 +92,10 @@ Plain `make` (and `make test`) always builds the release profile;
 iteration. Run plain `make` again before `make install` — the install
 guard rejects a debug-staged `blib/`.
 
-`make realclean` also runs `cargo clean`. If you switch to a different
-perl, run `cargo clean` manually once (stale bindgen output is not yet
-re-keyed by interpreter path).
+`make clean` (and `make realclean`) also runs `cargo clean`, removing
+`target/` — the next build is a full rebuild including bindgen. This
+also covers switching to a different perl (stale bindgen output is not
+yet re-keyed by interpreter path).
 
 ## License
 
