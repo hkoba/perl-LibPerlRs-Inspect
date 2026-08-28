@@ -4,6 +4,7 @@ members = [
     "crates/inspect-core",
     "crates/inspect-capture",
     "crates/inspect-xs",
+    "crates/inspect-cli",
 ]
 
 # libperl-rs 0.5 (Step 2 introspection 層) 公開までの開発用オーバーライド。

@@ -31,6 +31,26 @@ The implementation is a Rust cargo workspace (`crates/`) built on
 [libperl-rs](https://github.com/hkoba/libperl-rs); the XS glue is a
 `cdylib` loaded via XSLoader like any other XS module.
 
+## perl-inspect CLI
+
+`crates/inspect-cli` provides `perl-inspect`, a standalone binary with
+its own embedded perl: it *compiles* the target (BEGIN/`use` run, the
+main body does not — the same trust model as `perl -c`), walks the
+symbol table, and prints a JSON report (`schema_version: 1`) of every
+package/sub with a provenance tag (`file` / `imported` / `xs`), source
+line ranges, and the argument-spec analysis for subs defined in the
+target file (`--deep` embeds the full report: args / returns / logic /
+types / lints).
+
+```console
+$ cargo build -p inspect-cli --release
+$ ./target/release/perl-inspect lib/Foo.pm | jq '.packages."Foo".subs'
+$ ./target/release/perl-inspect -e 'sub add { my ($x, $y) = @_; $x + $y }'
+```
+
+(Not yet staged by `make install`; for now it is a cargo-built
+artifact.)
+
 ## Build requirements
 
 - Perl >= 5.42, built with development headers

@@ -476,6 +476,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "inspect-cli"
+version = "0.1.0"
+dependencies = [
+ "inspect-capture",
+ "inspect-core",
+ "libperl-config 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libperl-rs",
+ "serde_json",
+]
+
+[[package]]
 name = "inspect-core"
 version = "0.1.0"
 dependencies = [

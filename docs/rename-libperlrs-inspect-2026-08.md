@@ -27,10 +27,17 @@ docs/ 配下の既存文書と plan.md は歴史的記録として旧名のま�
 
 ## 次のステップ (roadmap §3.2 の Inspect マイルストーン)
 
-1. libperl-rs 0.5 (Step 2 introspection 層 = PR #24) 公開後、
+1. ~~libperl-rs 0.5 (Step 2 introspection 層 = PR #24) 公開後、
    inspect-capture/raw.rs を新 API (Op/Cop/Gv/PadName/StashWalker) 消費に
-   切り替えて薄化する。
-2. `inspect-cli` crate (自前インタプリタ内蔵 `perl-inspect`) の新設 —
-   MVP: compile-not-run + stash walk + 由来タグ + argspec +
-   `schema_version` 付き JSON。
+   切り替えて薄化する。~~ **完了 (2026-08-28)** — PR #24 merge 後、
+   [patch.crates-io] でローカル libperl-rs を参照して実施 (0.5 公開後に
+   patch 撤去 + dep bump)。golden 72 テスト同一 = 挙動不変。
+2. ~~`inspect-cli` crate (自前インタプリタ内蔵 `perl-inspect`) の新設~~
+   **完了 (2026-08-28)** — MVP: compile-not-run + stash walk + 由来タグ
+   (file/imported/xs) + 行範囲 + argspec (`--deep` で全レポート) +
+   `schema_version: 1` JSON。end-to-end テスト 2 件付き。
+   残: Makefile.PL (EXE_FILES 相当) での staging/install 統合。
 3. リポジトリ名/公開 (GitHub `perl-LibPerlRs-Inspect` 想定) はユーザー判断。
+4. 次の増分候補: M2 = compile.rs 系 BEGIN 帰属のファイル compile 移植で
+   import 引数付き `use` 一覧 (`compile_info`) を JSON に載せる
+   (roadmap §3.2 M2、採用フック)。PAD_BASE_SV の libperl-rs upstream。
