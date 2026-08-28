@@ -7,5 +7,5 @@ publish = false
 
 [dependencies]
 inspect-core = { path = "../inspect-core" }
-libperl-rs = "0.4.1"
-libperl-sys = "0.4.1"
+libperl-rs = "0.4.4"
+libperl-sys = "0.4.4"
