@@ -6,21 +6,22 @@
 use std::collections::HashMap;
 
 use inspect_core::ir::{DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
-use libperl_rs::{Cv, Perl};
+use libperl_rs::{Cop, Cv, Gv, Op, Perl};
 use libperl_sys::{
-    OPclass, OPf_KIDS, Perl_op_class, PerlInterpreter, cop, methop, op, padop, sv, svop,
-    svtype,
+    OPclass, OPf_KIDS, Perl_op_class, PerlInterpreter, methop, op, padop, sv, svop, svtype,
 };
 
 use crate::raw::*;
 
 /// 実行順 (CvSTART → op_next) の op 名リスト。M0 の op_names の実体。
 pub fn exec_op_names(cv: Cv) -> Result<Vec<String>, String> {
-    let start = cv.start();
-    if start.is_null() {
+    let Some(start) = cv.start_op() else {
         return Err("cannot analyze an XSUB (no op tree)".into());
-    }
-    Ok(next_iter(start).map(op_name).collect())
+    };
+    Ok(start
+        .next_iter()
+        .map(|o| op_name_of_type(o.op_type_raw() as u16))
+        .collect())
 }
 
 /// coderef の OP ツリー全体を SubIr に写し取る
@@ -34,7 +35,6 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
     }
     let file = cv.file();
     let proto = cv.proto();
-    let cv = cv.as_ptr() as *const libperl_sys::cv;
 
     let mut cap = Capturer {
         my_perl: perl.as_ptr(),
@@ -56,7 +56,7 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
         },
         proto,
         pad: capture_pad(cv),
-        start_id: cap.lookup(CvSTART(cv)),
+        start_id: cap.lookup(cv.start()),
         root: root_node,
     })
 }
@@ -72,7 +72,7 @@ struct RawLinks {
 
 struct Capturer {
     my_perl: *mut PerlInterpreter,
-    cv: *const libperl_sys::cv,
+    cv: Cv,
     ids: HashMap<usize, u32>,
     raws: Vec<RawLinks>,
     min_line: u32,
@@ -123,10 +123,9 @@ impl Capturer {
 
         let mut kids = Vec::new();
         if (flags as u32 & OPf_KIDS) != 0 {
-            let mut k = op_first(o);
-            while !k.is_null() {
-                kids.push(self.walk(k));
-                k = op_sibling(k);
+            let this = unsafe { Op::from_raw_unchecked(o) };
+            for kid in this.kids() {
+                kids.push(self.walk(kid.as_ptr()));
             }
         }
 
@@ -149,9 +148,9 @@ impl Capturer {
     fn extract_detail(&mut self, o: *const op, ty: u16, cls: OPclass, flags: u8) -> OpDetail {
         match cls {
             OPclass::OPclass_COP => {
-                let c = o as *const cop;
-                let line = CopLINE(c);
-                let file = CopFILE(c);
+                let c = unsafe { Cop::from_raw_unchecked(o as *const libperl_sys::COP) };
+                let line = c.line();
+                let file = c.file();
                 if line > 0 {
                     self.min_line = self.min_line.min(line);
                     self.max_line = self.max_line.max(line);
@@ -164,7 +163,7 @@ impl Capturer {
                     let p = unsafe { (*s).op_sv };
                     if p.is_null() {
                         // ithreads: const SV は pad に置かれる
-                        PAD_BASE_SV(CvPADLIST(self.cv), unsafe { (*o).op_targ })
+                        PAD_BASE_SV(self.cv.padlist(), unsafe { (*o).op_targ })
                     } else {
                         p as *const sv
                     }
@@ -174,7 +173,7 @@ impl Capturer {
             OPclass::OPclass_PADOP => {
                 // ithreads: GV 参照は PADOP になり pad 経由で解決する
                 let p = o as *const padop;
-                let sv = PAD_BASE_SV(CvPADLIST(self.cv), unsafe { (*p).op_padix });
+                let sv = PAD_BASE_SV(self.cv.padlist(), unsafe { (*p).op_padix });
                 sv_detail(sv)
             }
             OPclass::OPclass_METHOP => {
@@ -185,7 +184,7 @@ impl Capturer {
                     let sv = {
                         let p = unsafe { (*m).op_u.op_meth_sv };
                         if p.is_null() {
-                            PAD_BASE_SV(CvPADLIST(self.cv), unsafe { (*o).op_targ })
+                            PAD_BASE_SV(self.cv.padlist(), unsafe { (*o).op_targ })
                         } else {
                             p as *const sv
                         }
@@ -356,20 +355,13 @@ impl Capturer {
     /// `PAD_SVl((item)->pad_offset)`)。本プロジェクトは threaded perl
     /// 前提 (非 threaded では (*item).sv を直接読む形になる)
     unsafe fn aux_item_sv(&self, item: *const libperl_sys::UNOP_AUX_item) -> *const sv {
-        PAD_BASE_SV(CvPADLIST(self.cv), unsafe { (*item).pad_offset })
+        PAD_BASE_SV(self.cv.padlist(), unsafe { (*item).pad_offset })
     }
 
     /// pad index から変数名を引く (multideref の padsv 添字表示用)
     fn pad_name_at(&self, po: u64) -> Option<String> {
-        let pnl = padlist_names(CvPADLIST(self.cv));
-        if pnl.is_null() || po as isize > padnamelist_max(pnl) {
-            return None;
-        }
-        let pn = padnamelist_nth(pnl, po as usize);
-        if pn.is_null() {
-            return None;
-        }
-        PadnamePV(pn).filter(|s| !s.is_empty())
+        let pn = self.cv.pad_names().nth(po as usize)??;
+        pn.pv().filter(|s| !s.is_empty())
     }
 
     /// pass 2: 生ポインタをノード id に解決
@@ -429,16 +421,18 @@ fn sv_lit(sv: *const sv) -> SvLit {
     if sv.is_null() {
         return SvLit::Other("NULL".into());
     }
+    // GP 付き glob (libperl-rs の Gv が isGV_with_GP で判定) を最優先。
+    // PVCV/REGEXP と排他なので判定順の入替えに意味差はない。
+    if let Some(gv) = Gv::from_sv(sv as *mut _) {
+        return SvLit::Glob {
+            name: gv.name().unwrap_or_default(),
+            stash: gv.stash_name(),
+        };
+    }
     let t = SvTYPE(sv);
     match t {
         svtype::SVt_PVCV => return SvLit::Code,
         svtype::SVt_REGEXP => return SvLit::Other("REGEXP".into()),
-        svtype::SVt_PVGV | svtype::SVt_PVLV if isGV_with_GP(sv) => {
-            return SvLit::Glob {
-                name: HEK_KEY(GvNAME_HEK(sv)),
-                stash: HvNAME(GvSTASH(sv)),
-            };
-        }
         _ => {}
     }
     if (t as u32) >= svtype::SVt_PVAV as u32 {
@@ -473,34 +467,19 @@ fn sv_lit(sv: *const sv) -> SvLit {
 }
 
 /// 名前付き pad エントリを収集 (targ → 名前/宣言型のテーブル)
-fn capture_pad(cv: *const libperl_sys::cv) -> Vec<PadEntry> {
+fn capture_pad(cv: Cv) -> Vec<PadEntry> {
     let mut out = Vec::new();
-    let pl = CvPADLIST(cv);
-    if pl.is_null() {
-        return out;
-    }
-    let pnl = padlist_names(pl);
-    if pnl.is_null() {
-        return out;
-    }
-    let max = padnamelist_max(pnl);
-    for ix in 0..=max {
-        if ix < 0 {
-            continue;
-        }
-        let pn = padnamelist_nth(pnl, ix as usize);
-        if pn.is_null() {
-            continue;
-        }
-        let name = PadnamePV(pn);
+    for (ix, slot) in cv.pad_names().enumerate() {
+        let Some(pn) = slot else { continue };
+        let name = pn.pv();
         if name.as_deref().is_none_or(str::is_empty) {
             continue; // 無名スロット (一時領域・const 用) は載せない
         }
         out.push(PadEntry {
             ix: ix as u32,
             name,
-            typ: PadnameTYPE(pn),
-            flags: PadnameFLAGS(pn),
+            typ: pn.type_stash_name(),
+            flags: PadnameFLAGS(pn.as_ptr()),
         });
     }
     out

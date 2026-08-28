@@ -5,3 +5,10 @@ members = [
     "crates/inspect-capture",
     "crates/inspect-xs",
 ]
+
+# libperl-rs 0.5 (Step 2 introspection 層) 公開までの開発用オーバーライド。
+# 0.5 リリース後: 下記 patch を撤去し、各 crate の依存を "0.5" へ bump する
+# (0.4.1 round の patch.crates-io → crates.io 切替と同じ手順)。
+[patch.crates-io]
+libperl-rs = { path = "/home/hkoba/blob/libperl-rs/libperl-rs" }
+libperl-sys = { path = "/home/hkoba/blob/libperl-rs/libperl-rs/libperl-sys" }

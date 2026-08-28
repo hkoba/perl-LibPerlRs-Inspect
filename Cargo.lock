@@ -489,7 +489,7 @@ version = "0.1.0"
 dependencies = [
  "inspect-capture",
  "inspect-core",
- "libperl-config",
+ "libperl-config 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "libperl-rs",
  "serde_json",
 ]
@@ -545,6 +545,14 @@ dependencies = [
 [[package]]
 name = "libperl-config"
 version = "0.3.3"
+dependencies = [
+ "chrono",
+ "regex",
+]
+
+[[package]]
+name = "libperl-config"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7aa5d1a9e95bac324e5efc2a7324968079a6040ba60064ddfec1fb658891169b"
 dependencies = [
@@ -554,9 +562,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-macrogen"
-version = "0.1.6"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16d90726976d6489348b3e0f39e02e7f8e22642375b6e0dda40d72086dcaa1f9"
+checksum = "c94f3151a8697ef9f8fd7dfa2635edb8cee6a72cec1ec382c1134f19fd682c12"
 dependencies = [
  "clap",
  "flate2",
@@ -572,11 +580,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-macros"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c662640c25cad535caeaee457ee07e22b4f80524817bf80e311c3adbccdd4390"
+version = "0.4.3"
 dependencies = [
- "libperl-config",
+ "libperl-config 0.3.3",
  "proc-macro2",
  "quote",
  "syn",
@@ -584,24 +590,20 @@ dependencies = [
 
 [[package]]
 name = "libperl-rs"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a9a63f4648f97589fff0a7f313bc4df6d35d442f0aa8baef93b4534cd0eff5"
+version = "0.4.3"
 dependencies = [
- "libperl-config",
+ "libperl-config 0.3.3",
  "libperl-macros",
  "libperl-sys",
 ]
 
 [[package]]
 name = "libperl-sys"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91ee4c75db714d3632616b075357d62087360df19226d005e07152b62edba484"
+version = "0.4.3"
 dependencies = [
  "bindgen",
  "libc",
- "libperl-config",
+ "libperl-config 0.3.3",
  "libperl-macrogen",
  "phf",
  "phf_codegen",
