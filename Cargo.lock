@@ -18,34 +18,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "analyzer-capture"
-version = "0.1.0"
-dependencies = [
- "analyzer-core",
- "libperl-rs",
- "libperl-sys",
-]
-
-[[package]]
-name = "analyzer-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "analyzer-xs"
-version = "0.1.0"
-dependencies = [
- "analyzer-capture",
- "analyzer-core",
- "libperl-config",
- "libperl-rs",
- "serde_json",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -492,6 +464,34 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "inspect-capture"
+version = "0.1.0"
+dependencies = [
+ "inspect-core",
+ "libperl-rs",
+ "libperl-sys",
+]
+
+[[package]]
+name = "inspect-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "inspect-xs"
+version = "0.1.0"
+dependencies = [
+ "inspect-capture",
+ "inspect-core",
+ "libperl-config",
+ "libperl-rs",
+ "serde_json",
 ]
 
 [[package]]

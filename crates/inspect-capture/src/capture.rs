@@ -1,11 +1,11 @@
 //! 2 パスキャプチャ: pass 1 で木を歩き pre-order id を採番しつつ
 //! OpNode を構築、pass 2 で op_next / op_other / LOOP 分岐先の生ポインタを
 //! ノード id へ解決する。実行順チェーンが IR 内に閉じるので、以降の
-//! CFG 構築は純 Rust (analyzer-core) でできる。
+//! CFG 構築は純 Rust (inspect-core) でできる。
 
 use std::collections::HashMap;
 
-use analyzer_core::ir::{DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
+use inspect_core::ir::{DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
 use libperl_rs::{Cv, Perl};
 use libperl_sys::{
     OPclass, OPf_KIDS, Perl_op_class, PerlInterpreter, cop, methop, op, padop, sv, svop,

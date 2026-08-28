@@ -1,5 +1,5 @@
 [package]
-name = "analyzer-core"
+name = "inspect-core"
 version = "0.1.0"
 edition = "2024"
 description = "Pure-Rust IR and analysis passes for Perl OP trees (no libperl dependency)"

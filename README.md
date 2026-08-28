@@ -1,4 +1,9 @@
-# OpTree::Analyzer
+# LibPerlRs::Inspect
+
+*(formerly `OpTree::Analyzer` — renamed 2026-08 into the `LibPerlRs::*`
+family namespace, alongside
+[`LibPerlRs::PartialEval`](https://github.com/hkoba/perl-LibPerlRs-PartialEval);
+see `docs/rename-libperlrs-inspect-2026-08.md`)*
 
 Analyze a Perl subroutine reference (including anonymous subs returned
 by `eval`) at the OP-tree level, powered by Rust. Reports:
@@ -13,13 +18,13 @@ by `eval`) at the OP-tree level, powered by Rust. Reports:
 - lints (e.g. `my $x = EXPR if COND`)
 
 ```perl
-use OpTree::Analyzer;
+use LibPerlRs::Inspect;
 
 my $sub    = eval 'sub { my ($x) = @_; return unless $x; $x + 1 }';
-my $report = OpTree::Analyzer::analyze($sub);   # native hashref
+my $report = LibPerlRs::Inspect::analyze($sub);   # native hashref
 say $report->{args}{min_arity};
 
-my $names = OpTree::Analyzer::op_names($sub);   # execution-order op names
+my $names = LibPerlRs::Inspect::op_names($sub);   # execution-order op names
 ```
 
 The implementation is a Rust cargo workspace (`crates/`) built on

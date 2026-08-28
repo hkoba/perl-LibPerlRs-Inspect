@@ -1,13 +1,13 @@
 use strict;
 use warnings;
 use Test::More;
-use OpTree::Analyzer;
+use LibPerlRs::Inspect;
 
 sub args_of {
     my ($src) = @_;
     my $code = eval $src;
     die "fixture failed: $@" if $@ or ref $code ne 'CODE';
-    OpTree::Analyzer::analyze($code)->{args};
+    LibPerlRs::Inspect::analyze($code)->{args};
 }
 
 subtest 'signature' => sub {

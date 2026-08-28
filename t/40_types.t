@@ -1,13 +1,13 @@
 use strict;
 use warnings;
 use Test::More;
-use OpTree::Analyzer;
+use LibPerlRs::Inspect;
 
 sub types_of {
     my ($src) = @_;
     my $code = eval $src;
     die "fixture failed: $@" if $@ or ref $code ne 'CODE';
-    OpTree::Analyzer::analyze($code)->{types};
+    LibPerlRs::Inspect::analyze($code)->{types};
 }
 
 sub var_of {

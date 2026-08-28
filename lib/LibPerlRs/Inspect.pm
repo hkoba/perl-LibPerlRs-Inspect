@@ -1,11 +1,11 @@
-package OpTree::Analyzer;
+package LibPerlRs::Inspect;
 use strict;
 use warnings;
 
 our $VERSION = '0.01';
 
 require XSLoader;
-XSLoader::load('OpTree::Analyzer', $VERSION);
+XSLoader::load('LibPerlRs::Inspect', $VERSION);
 
 require JSON::PP;
 
@@ -31,14 +31,14 @@ __END__
 
 =head1 NAME
 
-OpTree::Analyzer - analyze a subroutine reference at the OP tree level
+LibPerlRs::Inspect - analyze a subroutine reference at the OP tree level
 
 =head1 SYNOPSIS
 
-    use OpTree::Analyzer;
+    use LibPerlRs::Inspect;
 
     my $sub = eval 'sub { my ($x) = @_; $x + 1 }';
-    my $names = OpTree::Analyzer::op_names($sub);   # execution-order op names
+    my $names = LibPerlRs::Inspect::op_names($sub);   # execution-order op names
 
 =head1 DESCRIPTION
 

@@ -2,6 +2,6 @@ use strict;
 use warnings;
 use Test::More;
 
-use_ok('OpTree::Analyzer');
+use_ok('LibPerlRs::Inspect');
 
 done_testing;

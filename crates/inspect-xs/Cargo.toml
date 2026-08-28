@@ -1,16 +1,16 @@
 [package]
-name = "analyzer-xs"
+name = "inspect-xs"
 version = "0.1.0"
 edition = "2024"
-description = "XS glue: OpTree::Analyzer loadable from Perl via XSLoader"
+description = "XS glue: LibPerlRs::Inspect loadable from Perl via XSLoader"
 publish = false
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-analyzer-core = { path = "../analyzer-core" }
-analyzer-capture = { path = "../analyzer-capture" }
+inspect-core = { path = "../inspect-core" }
+inspect-capture = { path = "../inspect-capture" }
 libperl-rs = "0.4.1"
 serde_json = "1"
 

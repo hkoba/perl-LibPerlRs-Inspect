@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/analyzer-core",
-    "crates/analyzer-capture",
-    "crates/analyzer-xs",
+    "crates/inspect-core",
+    "crates/inspect-capture",
+    "crates/inspect-xs",
 ]

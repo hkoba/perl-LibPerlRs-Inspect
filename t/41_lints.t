@@ -1,13 +1,13 @@
 use strict;
 use warnings;
 use Test::More;
-use OpTree::Analyzer;
+use LibPerlRs::Inspect;
 
 sub lints_of {
     my ($src) = @_;
     my $code = eval $src;
     die "fixture failed: $@" if $@ or ref $code ne 'CODE';
-    OpTree::Analyzer::analyze($code)->{lints}{lints};
+    LibPerlRs::Inspect::analyze($code)->{lints}{lints};
 }
 
 subtest 'my $x = EXPR if COND fires (受入条件)' => sub {

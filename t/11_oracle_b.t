@@ -5,7 +5,7 @@ use FindBin;
 use lib "$FindBin::Bin/lib";
 
 use B qw(svref_2object class);
-use OpTree::Analyzer;
+use LibPerlRs::Inspect;
 use Fixtures;
 
 # oracle テスト: capture_json の実行順チェーン (start_id → next) と
@@ -16,7 +16,7 @@ for my $fx (@Fixtures::FIXTURES) {
     my ($name, $src) = @$fx;
     my $code = Fixtures::compile($name, $src);
 
-    my $ir = OpTree::Analyzer::capture($code);
+    my $ir = LibPerlRs::Inspect::capture($code);
 
     # IR 側: id → node の索引を作り、実行順チェーンを辿る
     my %by_id;

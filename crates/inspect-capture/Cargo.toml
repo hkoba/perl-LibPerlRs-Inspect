@@ -1,0 +1,11 @@
+[package]
+name = "inspect-capture"
+version = "0.1.0"
+edition = "2024"
+description = "FFI layer: live Perl OP tree -> inspect-core SubIr"
+publish = false
+
+[dependencies]
+inspect-core = { path = "../inspect-core" }
+libperl-rs = "0.4.1"
+libperl-sys = "0.4.1"

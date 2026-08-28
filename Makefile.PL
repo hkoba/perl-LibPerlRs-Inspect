@@ -4,7 +4,7 @@ use ExtUtils::MakeMaker 6.64;    # TEST_REQUIRES
 use Config;
 use File::Spec;
 
-# 実体は Rust の cargo workspace (crates/analyzer-xs が cdylib を生成)。
+# 実体は Rust の cargo workspace (crates/inspect-xs が cdylib を生成)。
 # MY::postamble の cargo_build ターゲットが「cargo ビルド + blib への staging」
 # を行い、EUMM の dynamic :: にフックする (Module::Install::Rust 方式の
 # 純 EUMM 翻訳)。
@@ -41,9 +41,9 @@ unless (-e $perl_h) {
 }
 
 WriteMakefile(
-    NAME             => 'OpTree::Analyzer',
-    VERSION_FROM     => 'lib/OpTree/Analyzer.pm',
-    ABSTRACT_FROM    => 'lib/OpTree/Analyzer.pm',
+    NAME             => 'LibPerlRs::Inspect',
+    VERSION_FROM     => 'lib/LibPerlRs/Inspect.pm',
+    ABSTRACT_FROM    => 'lib/LibPerlRs/Inspect.pm',
     AUTHOR           => 'KOBAYASI, Hiroaki <buribullet@gmail.com>',
     LICENSE          => 'perl_5',
     MIN_PERL_VERSION => '5.042',    # golden テストが 5.42 の optree 形状前提
@@ -67,7 +67,7 @@ WriteMakefile(
             network => 'crates.io access at build time (see README.md)',
         },
     },
-    clean => { FILES => 'OpTree-Analyzer-*.tar.gz' },
+    clean => { FILES => 'LibPerlRs-Inspect-*.tar.gz' },
 );
 
 # MY:: の override 群。SUPER:: はコンパイル時のパッケージ基準で解決される
@@ -85,7 +85,7 @@ CARGO_PROFILE      = release
 RUST_TARGET_SUBDIR = release
 # 依存を更新したい時は `make CARGO_BUILD_FLAGS=` で --locked を外す
 CARGO_BUILD_FLAGS  = --locked
-RUST_DYLIB         = target/$(RUST_TARGET_SUBDIR)/libanalyzer_xs.$(SO)
+RUST_DYLIB         = target/$(RUST_TARGET_SUBDIR)/libinspect_xs.$(SO)
 INST_RUSTDYLIB     = $(INST_ARCHAUTODIR)/$(DLBASE).$(DLEXT)
 DEBUG_MARKER       = $(INST_ARCHAUTODIR)/.debug-build
 
@@ -100,7 +100,7 @@ dynamic :: cargo_build
 # 注: EUMM の $(FULLPERL) はクォート込みで展開されるので、ここでは重ねない。
 cargo_build ::
 	PERL=$(FULLPERL) PATH="`dirname $(FULLPERL)`:$$PATH" \
-	  $(CARGO) build -p analyzer-xs --profile $(CARGO_PROFILE) $(CARGO_BUILD_FLAGS)
+	  $(CARGO) build -p inspect-xs --profile $(CARGO_PROFILE) $(CARGO_BUILD_FLAGS)
 	$(NOECHO) $(MKPATH) $(INST_ARCHAUTODIR)
 	$(CP) $(RUST_DYLIB) $(INST_RUSTDYLIB)
 	$(CHMOD) $(PERM_RWX) $(INST_RUSTDYLIB)

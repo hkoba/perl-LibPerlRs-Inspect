@@ -19,5 +19,5 @@
 ^META\.json$
 ^pm_to_blib$
 ^blib/
-^OpTree-Analyzer-[\d.]+/
-^OpTree-Analyzer-[\d.]+\.tar\.gz$
+^LibPerlRs-Inspect-[\d.]+/
+^LibPerlRs-Inspect-[\d.]+\.tar\.gz$

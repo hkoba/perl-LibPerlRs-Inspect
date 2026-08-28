@@ -1,13 +1,13 @@
 use strict;
 use warnings;
 use Test::More;
-use OpTree::Analyzer;
+use LibPerlRs::Inspect;
 
 sub logic_of {
     my ($src) = @_;
     my $code = eval $src;
     die "fixture failed: $@" if $@ or ref $code ne 'CODE';
-    OpTree::Analyzer::analyze($code)->{logic};
+    LibPerlRs::Inspect::analyze($code)->{logic};
 }
 
 # when を [[cond添字, 0/1], ...] に正規化 (JSON::PP::Boolean 対策)

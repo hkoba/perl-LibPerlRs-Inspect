@@ -1,4 +1,4 @@
-//! analyzer-capture — 生きた Perl の OP ツリーを analyzer-core::ir::SubIr
+//! inspect-capture — 生きた Perl の OP ツリーを inspect-core::ir::SubIr
 //! (所有型 IR) へ写し取る FFI 層。
 //!
 //! 前提: Perl 5.42 / ithreads+multiplicity ビルド (システム perl)。

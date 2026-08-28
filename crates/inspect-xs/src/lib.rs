@@ -1,6 +1,6 @@
-//! OpTree::Analyzer — XS glue crate.
+//! LibPerlRs::Inspect — XS glue crate.
 //!
-//! Loaded from Perl via XSLoader as `auto/OpTree/Analyzer/Analyzer.so`.
+//! Loaded from Perl via XSLoader as `auto/LibPerlRs/Inspect/Analyzer.so`.
 //! coderef 引数は `#[xs_sub]` の `Cv` 種別 (libperl-rs) がトランポリンで
 //! 検査する。`analyze` はネイティブの hashref を返し、`*_json` 系は
 //! スキーマ確認やデバッグ用に JSON 文字列を返す。
@@ -8,45 +8,45 @@
 use libperl_rs::{Av, Cv, Hv, Perl, Rv, Sv, sv_undef_ptr, xs_boot, xs_sub};
 use serde_json::Value;
 
-/// `OpTree::Analyzer::op_names_json($coderef)` — op names of the sub's
+/// `LibPerlRs::Inspect::op_names_json($coderef)` — op names of the sub's
 /// execution-order chain (CvSTART → op_next → …), as a JSON array.
 #[xs_sub]
 fn op_names_json(code: Cv) -> Result<String, String> {
-    let names = analyzer_capture::exec_op_names(code)?;
+    let names = inspect_capture::exec_op_names(code)?;
     serde_json::to_string(&names).map_err(|e| e.to_string())
 }
 
-/// `OpTree::Analyzer::capture_json($coderef)` — full owned IR (SubIr)
+/// `LibPerlRs::Inspect::capture_json($coderef)` — full owned IR (SubIr)
 /// of the sub's OP tree, as JSON.
 #[xs_sub]
 fn capture_json(my_perl: &Perl, code: Cv) -> Result<String, String> {
-    let ir = analyzer_capture::capture_sub(my_perl, code)?;
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
     serde_json::to_string(&ir).map_err(|e| e.to_string())
 }
 
-/// `OpTree::Analyzer::dump_optree($coderef)` — human-readable tree dump
+/// `LibPerlRs::Inspect::dump_optree($coderef)` — human-readable tree dump
 /// for debugging.
 #[xs_sub]
 fn dump_optree(my_perl: &Perl, code: Cv) -> Result<String, String> {
-    let ir = analyzer_capture::capture_sub(my_perl, code)?;
-    Ok(analyzer_core::dump::dump(&ir))
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    Ok(inspect_core::dump::dump(&ir))
 }
 
-/// `OpTree::Analyzer::analyze_json($coderef)` — analysis report as a
+/// `LibPerlRs::Inspect::analyze_json($coderef)` — analysis report as a
 /// JSON string (args / returns / logic / types / lints).
 #[xs_sub]
 fn analyze_json(my_perl: &Perl, code: Cv) -> Result<String, String> {
-    let ir = analyzer_capture::capture_sub(my_perl, code)?;
-    let report = analyzer_core::passes::analyze(&ir);
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let report = inspect_core::passes::analyze(&ir);
     serde_json::to_string(&report).map_err(|e| e.to_string())
 }
 
-/// `OpTree::Analyzer::analyze($coderef)` — analysis report as a native
+/// `LibPerlRs::Inspect::analyze($coderef)` — analysis report as a native
 /// nested hashref (no JSON round-trip on the Perl side).
 #[xs_sub]
 fn analyze(my_perl: &Perl, code: Cv) -> Result<Rv<Hv>, String> {
-    let ir = analyzer_capture::capture_sub(my_perl, code)?;
-    let report = analyzer_core::passes::analyze(&ir);
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let report = inspect_core::passes::analyze(&ir);
     let value = serde_json::to_value(&report).map_err(|e| e.to_string())?;
     let Value::Object(map) = value else {
         return Err("analysis report did not serialize to an object".into());
@@ -90,6 +90,6 @@ fn build_hv(perl: &Perl, map: &serde_json::Map<String, Value>) -> Hv {
 }
 
 xs_boot! {
-    package = "OpTree::Analyzer";
+    package = "LibPerlRs::Inspect";
     subs = [op_names_json, capture_json, dump_optree, analyze_json, analyze];
 }

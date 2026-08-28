@@ -5,7 +5,7 @@ use FindBin;
 use lib "$FindBin::Bin/lib";
 use File::Spec;
 
-use OpTree::Analyzer;
+use LibPerlRs::Inspect;
 use JSON::PP ();
 use Fixtures;
 
@@ -18,7 +18,7 @@ for my $fx (@Fixtures::FIXTURES) {
     my ($name, $src) = @$fx;
     my $code = Fixtures::compile($name, $src);
 
-    my $raw = OpTree::Analyzer::capture_json($code);
+    my $raw = LibPerlRs::Inspect::capture_json($code);
     # eval 連番はテストの実行順で変わるため正規化する
     $raw =~ s/\(eval \d+\)/(eval)/g;
     my $got = JSON::PP::decode_json($raw);
