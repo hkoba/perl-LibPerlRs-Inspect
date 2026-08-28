@@ -471,6 +471,7 @@ name = "inspect-capture"
 version = "0.1.0"
 dependencies = [
  "inspect-core",
+ "libperl-config",
  "libperl-rs",
  "libperl-sys",
 ]

@@ -59,6 +59,8 @@ fn main() -> ExitCode {
     let envp: Vec<String> = env::vars().map(|(k, v)| format!("{k}={v}")).collect();
 
     let mut perl = Perl::new();
+    // parse 中の BEGIN を PL_beginav_save に退避させる (use 抽出用、M2)
+    inspect_capture::enable_begin_capture(&perl);
     let rc = perl.parse(&perl_args, &envp);
     if rc != 0 {
         // compile エラー本文は perl 自身が stderr へ出している
@@ -84,7 +86,27 @@ fn main() -> ExitCode {
         .map(|(pkg, subs)| (pkg, json!({ "subs": subs })))
         .collect();
 
-    let out = json!({
+    // use 抽出は stash walk の**後**に行う: B::Deparse の require が
+    // symbol table を汚染するため (inspect-capture begins.rs の注意書き)
+    let (uses, opaque_begins, uses_error) =
+        match inspect_capture::file_begins(&perl, &main_file) {
+            Ok(fb) => {
+                let uses: Vec<Value> = fb
+                    .uses
+                    .iter()
+                    .map(|u| json!({ "line": u.line, "stmt": u.stmt }))
+                    .collect();
+                let opaque: Vec<Value> = fb
+                    .opaque_begins
+                    .iter()
+                    .map(|l| json!({ "line": l }))
+                    .collect();
+                (uses, opaque, None)
+            }
+            Err(e) => (Vec::new(), Vec::new(), Some(e)),
+        };
+
+    let mut out = json!({
         "schema_version": SCHEMA_VERSION,
         "generator": {
             "name": "perl-inspect (LibPerlRs::Inspect)",
@@ -95,8 +117,13 @@ fn main() -> ExitCode {
             "threaded": libperl_rs::PERL_THREADED == "threaded",
         },
         "file": main_file,
+        "uses": uses,
+        "opaque_begins": opaque_begins,
         "packages": packages,
     });
+    if let Some(e) = uses_error {
+        out["uses_error"] = json!(e);
+    }
     println!("{}", serde_json::to_string_pretty(&out).expect("serialize"));
     ExitCode::SUCCESS
 }

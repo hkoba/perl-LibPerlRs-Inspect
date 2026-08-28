@@ -1,9 +1,19 @@
 Cargo.lock
 Cargo.toml
+MANIFEST			This list of files
+MANIFEST.SKIP
+Makefile.PL
+README.md
 crates/inspect-capture/Cargo.toml
+crates/inspect-capture/build.rs
+crates/inspect-capture/src/begins.rs
 crates/inspect-capture/src/capture.rs
 crates/inspect-capture/src/lib.rs
 crates/inspect-capture/src/raw.rs
+crates/inspect-cli/Cargo.toml
+crates/inspect-cli/build.rs
+crates/inspect-cli/src/main.rs
+crates/inspect-cli/tests/cli.rs
 crates/inspect-core/Cargo.toml
 crates/inspect-core/src/dump.rs
 crates/inspect-core/src/ir.rs
@@ -15,14 +25,10 @@ crates/inspect-core/src/passes/mod.rs
 crates/inspect-core/src/passes/retspec.rs
 crates/inspect-core/src/passes/types.rs
 crates/inspect-core/src/render.rs
-crates/inspect-xs/build.rs
 crates/inspect-xs/Cargo.toml
+crates/inspect-xs/build.rs
 crates/inspect-xs/src/lib.rs
 lib/LibPerlRs/Inspect.pm
-Makefile.PL
-MANIFEST			This list of files
-MANIFEST.SKIP
-README.md
 t/00_load.t
 t/01_opnames.t
 t/10_capture_golden.t

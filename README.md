@@ -1,12 +1,11 @@
 # LibPerlRs::Inspect
 
-*(formerly `OpTree::Analyzer` — renamed 2026-08 into the `LibPerlRs::*`
-family namespace, alongside
-[`LibPerlRs::PartialEval`](https://github.com/hkoba/perl-LibPerlRs-PartialEval);
-see `docs/rename-libperlrs-inspect-2026-08.md`)*
-
 Analyze a Perl subroutine reference (including anonymous subs returned
-by `eval`) at the OP-tree level, powered by Rust. Reports:
+by `eval`) at the OP-tree level, powered by Rust. Part of the
+`LibPerlRs::*` family built on
+[libperl-rs](https://github.com/hkoba/libperl-rs), alongside
+[`LibPerlRs::PartialEval`](https://github.com/hkoba/perl-LibPerlRs-PartialEval).
+Reports:
 
 - argument specification (signatures, `my (...) = @_`, `shift`/`pop`,
   `$_[n]` — min/max arity, parameter names, defaults)
@@ -40,7 +39,11 @@ symbol table, and prints a JSON report (`schema_version: 1`) of every
 package/sub with a provenance tag (`file` / `imported` / `xs`), source
 line ranges, and the argument-spec analysis for subs defined in the
 target file (`--deep` embeds the full report: args / returns / logic /
-types / lints).
+types / lints). The report also reconstructs the file's own `use`
+statements **with their import arguments** (`uses`, via BEGIN capture +
+`B::Deparse::begin_is_use` — the technique shared with
+`LibPerlRs::PartialEval`'s `compile_info`), plus the line numbers of
+opaque `BEGIN` blocks (`opaque_begins`).
 
 ```console
 $ cargo build -p inspect-cli --release
@@ -65,7 +68,7 @@ artifact.)
 
 Linux is the supported platform for now. macOS is untested: perl expects
 loadable modules in `.bundle` format there, which rustc does not emit
-directly (a re-link step would be needed — see `docs/` notes).
+directly (a re-link step would be needed).
 
 ## Installation
 

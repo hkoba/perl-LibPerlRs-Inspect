@@ -9,3 +9,6 @@ publish = false
 inspect-core = { path = "../inspect-core" }
 libperl-rs = "0.4.4"
 libperl-sys = "0.4.4"
+
+[build-dependencies]
+libperl-config = "0.3.3"

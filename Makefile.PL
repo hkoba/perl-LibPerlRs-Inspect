@@ -61,7 +61,16 @@ WriteMakefile(
         'meta-spec'    => { version => 2 },
         dynamic_config => 1,
         no_index       => { directory => ['crates'] },
-        # resources.repository は GitHub 公開時に追記
+        resources      => {
+            repository => {
+                type => 'git',
+                url  => 'https://github.com/hkoba/perl-LibPerlRs-Inspect.git',
+                web  => 'https://github.com/hkoba/perl-LibPerlRs-Inspect',
+            },
+            bugtracker => {
+                web => 'https://github.com/hkoba/perl-LibPerlRs-Inspect/issues',
+            },
+        },
         x_external_build_requirements => {
             cargo   => 'Rust toolchain (edition 2024, cargo >= 1.85)',
             network => 'crates.io access at build time (see README.md)',

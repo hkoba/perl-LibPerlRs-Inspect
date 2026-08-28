@@ -1,10 +1,5 @@
-//! Perl 公式 API の薄い適応層 — libperl-rs 0.5 (Step 2 introspection
-//! 層) が提供しない**残余だけ**を持つ。
-//!
-//! かつてここにあった OpNextIter / op_first / op_sibling / CopLINE /
-//! CopFILE / Gv・Padname 系の適応は libperl-rs の newtype 層
-//! (Op / Cop / Gv / PadName — 旧 backlog #3 の upstream) に置き換えた。
-//! 残っているのは:
+//! Perl 公式 API の薄い適応層 — libperl-rs 0.4.4 の introspection 層
+//! (Op / Cop / Gv / PadName newtype) が提供しない**残余だけ**を持つ:
 //!   - `SvTYPE` / `SvROK` / `SvRV`: 生ポインタ (`*const sv`) のまま
 //!     リテラル抽出 (capture.rs の sv_lit) が使う素通しラッパ
 //!   - `op_name_of_type`: OP_NAME は libperl-sys/skip-codegen.txt 掲載の

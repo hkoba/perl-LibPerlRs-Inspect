@@ -71,6 +71,44 @@ fn mvp_json_report() {
     assert!(all_provenances.iter().any(|p| p == "xs"), "no xs entry seen");
 }
 
+const USES_SCRIPT: &str = "\
+package Demo;
+use strict;
+use File::Basename qw(basename);
+use constant ANSWER => 42;
+BEGIN { our $ready = 1 }
+sub hi { basename($0) }
+";
+
+#[test]
+fn uses_extraction() {
+    let v = run(&["-e", USES_SCRIPT]);
+    // use 文は BEGIN 帰属 + begin_is_use 逆変換で復元される (import 引数付き)
+    let uses = v["uses"].as_array().expect("uses array");
+    assert!(
+        uses.iter().any(|u| {
+            u["line"] == 3
+                && u["stmt"].as_str().is_some_and(|s| {
+                    s.contains("File::Basename") && s.contains("basename")
+                })
+        }),
+        "uses = {uses:?}"
+    );
+    // use 形でない生の BEGIN は opaque_begins に行番号で載る。
+    // sitecustomize / -M 由来の line-0 注入は除外されるので、この
+    // スクリプトでは line 5 の BEGIN ちょうど 1 件になる
+    assert_eq!(
+        v["opaque_begins"],
+        serde_json::json!([{ "line": 5 }]),
+        "opaque_begins mismatch"
+    );
+    // line 0 の混入がないこと (uses 側も)
+    assert!(
+        !uses.iter().any(|u| u["line"] == 0),
+        "line-0 injected use leaked: {uses:?}"
+    );
+}
+
 #[test]
 fn deep_report() {
     let v = run(&["--deep", "-e", SCRIPT]);
