@@ -19,7 +19,7 @@ for my $fx (@Fixtures::FIXTURES) {
     my $code = Fixtures::compile($name, $src);
 
     my $raw = LibPerlRs::Inspect::capture_json($code);
-    # eval 連番はテストの実行順で変わるため正規化する
+    # Normalize the eval sequence number, which varies with test execution order
     $raw =~ s/\(eval \d+\)/(eval)/g;
     my $got = JSON::PP::decode_json($raw);
 

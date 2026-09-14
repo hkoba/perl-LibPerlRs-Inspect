@@ -1,7 +1,7 @@
-//! inspect-core — Perl OP ツリーの所有型 IR と解析パス。
+//! inspect-core — owned IR of the Perl OP tree and the analysis passes over it.
 //!
-//! libperl には依存しない。IR (SubIr) は inspect-capture が生成し、
-//! ここの解析パスはインタプリタ無しで `cargo test` できる。
+//! Does not depend on libperl. The IR (SubIr) is produced by inspect-capture,
+//! and the analysis passes here can be `cargo test`ed without an interpreter.
 
 pub mod dump;
 pub mod ir;

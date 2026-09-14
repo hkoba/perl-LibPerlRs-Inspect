@@ -1,5 +1,5 @@
-//! SubIr の人間可読ダンプ (デバッグ用)。B::Concise の雰囲気に寄せた
-//! ツリー表示。純 Rust なのでインタプリタ無しでテストできる。
+//! Human-readable dump of a SubIr (for debugging). A tree display in the
+//! spirit of B::Concise. Pure Rust, so it can be tested without an interpreter.
 
 use crate::ir::{OpDetail, OpNode, SubIr};
 

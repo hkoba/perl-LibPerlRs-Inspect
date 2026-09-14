@@ -1,8 +1,8 @@
 use libperl_config::*;
 
 fn main() {
-    // begins.rs の PL_savebegin 書き込みが threading モードで形を変える
-    // ため、perl_useithreads cfg をこの crate にも立てる
+    // The PL_savebegin write in begins.rs takes a different form depending
+    // on the threading mode, so raise the perl_useithreads cfg in this crate too
     let cfg = PerlConfig::default();
     cfg.emit_features(&["useithreads"]);
 }

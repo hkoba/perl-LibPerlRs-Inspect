@@ -1,8 +1,8 @@
-//! inspect-capture — 生きた Perl の OP ツリーを inspect-core::ir::SubIr
-//! (所有型 IR) へ写し取る FFI 層。
+//! inspect-capture — FFI layer that copies a live Perl OP tree into
+//! inspect-core::ir::SubIr (owned-type IR).
 //!
-//! 前提: Perl 5.42 / ithreads+multiplicity ビルド (システム perl)。
-//! 解析は 1 回の XS 呼び出し内で完結し、生ポインタは IR に残さない。
+//! Assumptions: Perl 5.42 / ithreads+multiplicity build (system perl).
+//! Analysis completes within a single XS call; no raw pointers remain in the IR.
 
 mod begins;
 mod capture;

@@ -2,9 +2,9 @@ package Fixtures;
 use strict;
 use warnings;
 
-# 全テストで共有するフィクスチャ (名前 => eval するソース文字列)。
-# 主用途 (eval が返す anonymous sub の解析) に合わせ、常に eval 経由で
-# コンパイルする。
+# Fixtures shared by all tests (name => source string to eval).
+# Matching the primary use case (analyzing the anonymous sub returned by
+# eval), they are always compiled via eval.
 our @FIXTURES = (
     [empty        => 'sub {}'],
     [shift_style  => 'sub { my $self = shift; my $n = shift; $self + $n }'],

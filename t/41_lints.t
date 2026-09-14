@@ -10,13 +10,14 @@ sub lints_of {
     LibPerlRs::Inspect::analyze($code)->{lints}{lints};
 }
 
-subtest 'my $x = EXPR if COND fires (受入条件)' => sub {
+subtest 'my $x = EXPR if COND fires (acceptance)' => sub {
     my $l = lints_of('sub { my $x = 5 if $_[0]; $x }');
     is scalar @$l, 1, 'one lint' or diag explain $l;
     is $l->[0]{id}, 'my-in-conditional-statement', 'lint id';
     is $l->[0]{severity}, 'error', 'severity';
     is $l->[0]{var}, '$x', 'variable name';
     ok defined $l->[0]{line}, 'has line';
+    like $l->[0]{message}, qr/previous value/, 'lint message is English';
 };
 
 subtest 'unless form fires' => sub {
@@ -25,7 +26,7 @@ subtest 'unless form fires' => sub {
     is $l->[0]{var}, '$y', 'variable name';
 };
 
-subtest 'block if does NOT fire (受入条件)' => sub {
+subtest 'block if does NOT fire (acceptance)' => sub {
     my $l = lints_of('sub { if ($_[0]) { my $x = 5; return $x } 0 }');
     is_deeply $l, [], 'no lint for block-scoped my' or diag explain $l;
 };

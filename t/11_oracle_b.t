@@ -8,9 +8,9 @@ use B qw(svref_2object class);
 use LibPerlRs::Inspect;
 use Fixtures;
 
-# oracle テスト: capture_json の実行順チェーン (start_id → next) と
-# 各ノードの class を、B モジュール (Perl 純正のリフレクション) の
-# START → next チェーンおよび B::class と突き合わせる。
+# Oracle test: cross-check capture_json's execution-order chain (start_id -> next)
+# and each node's class against the START -> next chain and B::class of the
+# B module (Perl's native reflection).
 
 for my $fx (@Fixtures::FIXTURES) {
     my ($name, $src) = @$fx;
@@ -18,7 +18,7 @@ for my $fx (@Fixtures::FIXTURES) {
 
     my $ir = LibPerlRs::Inspect::capture($code);
 
-    # IR 側: id → node の索引を作り、実行順チェーンを辿る
+    # IR side: build an id -> node index and walk the execution-order chain
     my %by_id;
     my @stack = ($ir->{root});
     while (@stack) {
@@ -36,7 +36,7 @@ for my $fx (@Fixtures::FIXTURES) {
         $id = $n->{next};
     }
 
-    # B 側: CvSTART から op_next を辿る
+    # B side: follow op_next starting from CvSTART
     my $cv = svref_2object($code);
     my (@b_names, @b_classes);
     my %bseen;

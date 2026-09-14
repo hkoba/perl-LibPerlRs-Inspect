@@ -1,48 +1,53 @@
-//! BEGIN 帰属による `use` 抽出 — perl-LibPerlRs-PartialEval compile.rs の
-//! 技法 (差分窓 + CvFILE 完全一致 + B::Deparse::begin_is_use 逆変換) の
-//! **ファイル compile 版**。roadmap
-//! (libperl-rs/docs/plan/roadmap-next-projects-2026-08.md §3.2) の M2。
+//! `use` extraction by BEGIN attribution — the **file-compile version** of
+//! the technique in perl-LibPerlRs-PartialEval compile.rs (diff window +
+//! exact CvFILE match + B::Deparse::begin_is_use reverse conversion).
+//! M2 of the roadmap
+//! (libperl-rs/docs/plan/roadmap-next-projects-2026-08.md §3.2).
 //!
-//! 手順:
-//!   1. `perl_parse` の**前**に [`enable_begin_capture`]
-//!      (`PL_savebegin = TRUE`) — parse 中に走った BEGIN CV が
-//!      `PL_beginav_save` に退避されるようになる
-//!   2. parse 後に [`file_begins`]: CvFILE が対象ファイルに**完全一致**
-//!      する BEGIN だけ選び (推移的にロードされた他モジュールの BEGIN を
-//!      除外)、埋め込みインタプリタ内の `B::Deparse::begin_is_use`
-//!      (非公開だが長年安定 — PartialEval と同じ判断) で
-//!      `use Foo (...);` 文へ逆変換する
+//! Steps:
+//!   1. **Before** `perl_parse`, call [`enable_begin_capture`]
+//!      (`PL_savebegin = TRUE`) — BEGIN CVs that run during parse are
+//!      then saved into `PL_beginav_save`
+//!   2. After parse, [`file_begins`]: pick only the BEGINs whose CvFILE
+//!      **exactly matches** the target file (excluding BEGINs of other
+//!      modules loaded transitively), and reverse-convert them into
+//!      `use Foo (...);` statements via `B::Deparse::begin_is_use` inside
+//!      the embedded interpreter (undocumented but stable for years — the
+//!      same judgement PartialEval makes)
 //!
-//! PartialEval の `Handle` と違い refcount の retain/release はしない:
-//! 使い捨てインタプリタ前提で、CV は `PL_beginav_save` 自身が生かして
-//! いる。既知の制限も PartialEval と同じ — `#line` は CvFILE を変えるので
-//! 帰属から漏れる。`begin_is_use` が `""` を返す hint-bit pragma
-//! (strict / warnings / feature 等) は uses に載せない (COP hints 側に
-//! 焼き付いている)。行番号 0 の BEGIN (sitecustomize / `-Mmodule` 等、
-//! ソース 1 行目より前の注入) はソース由来でないため除外する。
+//! Unlike PartialEval's `Handle`, no refcount retain/release is done: the
+//! interpreter is assumed to be throwaway, and the CVs are kept alive by
+//! `PL_beginav_save` itself. The known limitations are also the same as
+//! PartialEval — `#line` changes CvFILE, so such BEGINs escape attribution.
+//! Hint-bit pragmas (strict / warnings / feature etc.), for which
+//! `begin_is_use` returns `""`, are not listed in uses (they are baked into
+//! the COP hints). BEGINs at line 0 (sitecustomize / `-Mmodule` etc.,
+//! injected before line 1 of the source) do not come from the source and
+//! are excluded.
 //!
-//! 注意: [`file_begins`] は B / B::Deparse をインタプリタに require する
-//! ため symbol table を汚染する。stash walk を先に済ませてから呼ぶこと。
+//! Note: [`file_begins`] requires B / B::Deparse into the interpreter and
+//! therefore pollutes the symbol table. Finish the stash walk before
+//! calling it.
 
 use libperl_rs::{Cv, Perl, perl_call};
 use libperl_sys as sys;
 
-/// 逆変換できた `use`/`no` 文 1 つ。
+/// One `use`/`no` statement that could be reverse-converted.
 pub struct FileUse {
-    /// 文の行番号 (BEGIN 本体の最初の COP)。
+    /// Line number of the statement (first COP of the BEGIN body).
     pub line: Option<u32>,
-    /// `use Foo ('a', 'b');` 形の文 (末尾改行は除去済み)。
+    /// Statement of the form `use Foo ('a', 'b');` (trailing newline stripped).
     pub stmt: String,
 }
 
-/// [`file_begins`] の結果: `use` 文と、`use` 形でない生の BEGIN
-/// ブロックの行番号。
+/// Result of [`file_begins`]: the `use` statements, plus the line numbers
+/// of raw BEGIN blocks that are not of `use` form.
 pub struct FileBegins {
     pub uses: Vec<FileUse>,
     pub opaque_begins: Vec<Option<u32>>,
 }
 
-/// `PL_savebegin` を立てる。**`perl_parse` より前に**呼ぶこと。
+/// Set `PL_savebegin`. Must be called **before `perl_parse`**.
 pub fn enable_begin_capture(perl: &Perl) {
     let my_perl = perl.as_ptr();
     #[cfg(perl_useithreads)]
@@ -56,17 +61,17 @@ pub fn enable_begin_capture(perl: &Perl) {
     }
 }
 
-/// parse 済みインタプリタから、`file` (通常は `$0`) に帰属する BEGIN 群を
-/// `use` 文 / opaque に分類して返す。
+/// From a parsed interpreter, return the BEGINs attributed to `file`
+/// (usually `$0`), classified into `use` statements / opaque.
 pub fn file_begins(perl: &Perl, file: &str) -> Result<FileBegins, String> {
     let my_perl = perl.as_ptr();
 
-    // 1. PL_beginav_save から CvFILE 完全一致の BEGIN を選ぶ
+    // 1. Pick the BEGINs from PL_beginav_save whose CvFILE matches exactly
     let mut cvs: Vec<Cv> = Vec::new();
     unsafe {
         let av = sys::PL_beginav_save!(my_perl);
         if !av.is_null() {
-            // 内部 AV (magic なし) — AvFILLp+1 個を直接読む
+            // Internal AV (no magic) — read AvFILLp+1 elements directly
             let n = sys::AvFILLp(av) + 1;
             for i in 0..n {
                 let elem = *sys::AvARRAY(av).add(i as usize);
@@ -83,11 +88,12 @@ pub fn file_begins(perl: &Perl, file: &str) -> Result<FileBegins, String> {
         }
     }
 
-    // 行番号 (最初の COP)。line 0 の BEGIN は「ソースの 1 行目より前に
-    // インタプリタ/起動側が注入したもの」なので除外する — 実例:
-    // USE_SITECUSTOMIZE ビルド (Fedora 等) が全プログラムに差し込む
-    // `BEGIN { do ".../sitecustomize.pl" if -f ... }`、および `-Mmodule`
-    // 由来の use (どちらも CvFILE は本体 file 名、CopLINE は 0 になる)。
+    // Line number (first COP). A BEGIN at line 0 was "injected by the
+    // interpreter / launcher before line 1 of the source", so exclude it —
+    // real examples: the `BEGIN { do ".../sitecustomize.pl" if -f ... }`
+    // that USE_SITECUSTOMIZE builds (Fedora etc.) insert into every
+    // program, and uses coming from `-Mmodule` (in both cases CvFILE is
+    // the main file name and CopLINE is 0).
     let mut lines: Vec<Option<u32>> = Vec::with_capacity(cvs.len());
     let mut kept: Vec<Cv> = Vec::with_capacity(cvs.len());
     for cv in cvs {
@@ -101,7 +107,7 @@ pub fn file_begins(perl: &Perl, file: &str) -> Result<FileBegins, String> {
     let cvs = kept;
     let stmts = begin_stmts(perl, &cvs)?;
 
-    // 2. begin_is_use の 3 値 (文 / "" / undef) で分類
+    // 2. Classify by the three-valued result of begin_is_use (statement / "" / undef)
     let mut uses = Vec::new();
     let mut opaque_begins = Vec::new();
     for (i, s) in stmts.into_iter().enumerate() {
@@ -110,22 +116,22 @@ pub fn file_begins(perl: &Perl, file: &str) -> Result<FileBegins, String> {
                 line: lines[i],
                 stmt: stmt.trim_end_matches('\n').to_string(),
             }),
-            Some(_) => {} // hint-bit pragma: COP hints 持ちなので載せない
+            Some(_) => {} // hint-bit pragma: carried by COP hints, so not listed
             None => opaque_begins.push(lines[i]),
         }
     }
     Ok(FileBegins { uses, opaque_begins })
 }
 
-/// BEGIN CV 群を埋め込みインタプリタ内で `begin_is_use` に通し、
-/// CV ごとに Some(文) (hint pragma は Some("")) / None (opaque) を返す。
+/// Run the BEGIN CVs through `begin_is_use` inside the embedded interpreter
+/// and return, per CV, Some(statement) (Some("") for hint pragmas) / None (opaque).
 fn begin_stmts(perl: &Perl, cvs: &[Cv]) -> Result<Vec<Option<String>>, String> {
     if cvs.is_empty() {
         return Ok(Vec::new());
     }
     let my_perl = perl.as_ptr();
     unsafe {
-        // 対象 CV への coderef を作業用パッケージ配列に積む
+        // Push coderefs to the target CVs onto a scratch package array
         let av = perl_call!(
             my_perl,
             Perl_get_av(
@@ -134,14 +140,15 @@ fn begin_stmts(perl: &Perl, cvs: &[Cv]) -> Result<Vec<Option<String>>, String> {
             )
         );
         for cv in cvs {
-            // newRV は referent を inc する flavor。返る RV (refcnt 1) の
-            // 所有権はそのまま av_push へ移す
+            // newRV is the flavor that increments the referent. Ownership of
+            // the returned RV (refcnt 1) is handed straight to av_push
             let rv = perl_call!(my_perl, Perl_newRV(cv.as_ptr() as *mut sys::SV));
             perl_call!(my_perl, Perl_av_push(av, rv));
         }
 
-        // 逆変換は Perl 側で。undef は "U"、それ以外は "S" 前置で
-        // 文字列化して @stmts に並べる (undef と "" の区別を保つ)
+        // The reverse conversion is done on the Perl side. Stringify into
+        // @stmts with undef as "U" and everything else prefixed "S"
+        // (preserving the distinction between undef and "")
         let code = c"{
             package LibPerlRs::Inspect::_cli;
             our (@begins, @stmts);
@@ -183,14 +190,14 @@ fn begin_stmts(perl: &Perl, cvs: &[Cv]) -> Result<Vec<Option<String>>, String> {
             };
             out.push(match s.strip_prefix('S') {
                 Some(stmt) => Some(stmt.to_string()),
-                None => None, // "U" = undef = use 形でない BEGIN
+                None => None, // "U" = undef = BEGIN not of use form
             });
         }
         Ok(out)
     }
 }
 
-/// $@ が非空なら Some(メッセージ)。
+/// Some(message) if $@ is non-empty.
 fn errsv(perl: &Perl) -> Option<String> {
     let msg_sv = perl.get_sv("@", 0)?;
     let msg = msg_sv.pv(perl);

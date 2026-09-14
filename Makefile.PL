@@ -4,25 +4,25 @@ use ExtUtils::MakeMaker 6.64;    # TEST_REQUIRES
 use Config;
 use File::Spec;
 
-# 実体は Rust の cargo workspace (crates/inspect-xs が cdylib を生成)。
-# MY::postamble の cargo_build ターゲットが「cargo ビルド + blib への staging」
-# を行い、EUMM の dynamic :: にフックする (Module::Install::Rust 方式の
-# 純 EUMM 翻訳)。
+# The real build is a Rust cargo workspace (crates/inspect-xs produces the cdylib).
+# The cargo_build target in MY::postamble does "cargo build + staging into blib"
+# and hooks into EUMM's dynamic :: (a pure-EUMM translation of the
+# Module::Install::Rust approach).
 #
-# ビルドと install の分離:
-#   - `make` / `make test`     = release ビルド + staging + テスト (通常ユーザで)
-#   - `make debug`             = dev プロファイル (開発イテレーション用に高速)
-#   - `make install`           = blib から先へのコピー**のみ** (cargo は走らない)
-# EUMM 7.76 は pure_*_install :: all / doc_*_install :: all で install から
-# ビルド連鎖を引き込むため、MY::install で `all` を剥がし blib_ready 検査に
-# 差し替えている。root で cargo が走ると CARGO_HOME が変わって全再ビルドに
-# なる上、target/ に root 所有ファイルが残るため。
+# Separation of build and install:
+#   - `make` / `make test`     = release build + staging + tests (as a normal user)
+#   - `make debug`             = dev profile (fast, for development iteration)
+#   - `make install`           = copy from blib onward **only** (cargo does not run)
+# EUMM 7.76 pulls the build chain into install via pure_*_install :: all /
+# doc_*_install :: all, so MY::install strips `all` and substitutes the
+# blib_ready check. Running cargo as root changes CARGO_HOME (forcing a full
+# rebuild) and leaves root-owned files under target/.
 #
-# 注意: linkext => { LINKTYPE => '' } を指定してはならない。
-# pure_all → linkext → dynamic の連鎖が切れて postamble のフックが
-# make から呼ばれなくなる。
+# Caution: do NOT specify linkext => { LINKTYPE => '' }.
+# It breaks the pure_all -> linkext -> dynamic chain, and the postamble hook
+# is no longer invoked by make.
 
-# ---- 外部ツールチェーン検査 (CPAN Testers "NA" 慣行: Makefile を書かず exit 0) ----
+# ---- External toolchain check (CPAN Testers "NA" convention: exit 0 without writing a Makefile) ----
 
 my $cargo = $ENV{CARGO} || 'cargo';
 my $cargo_ver = `$cargo --version 2>&1`;
@@ -46,7 +46,7 @@ WriteMakefile(
     ABSTRACT_FROM    => 'lib/LibPerlRs/Inspect.pm',
     AUTHOR           => 'KOBAYASI, Hiroaki <buribullet@gmail.com>',
     LICENSE          => 'perl_5',
-    MIN_PERL_VERSION => '5.042',    # golden テストが 5.42 の optree 形状前提
+    MIN_PERL_VERSION => '5.042',    # golden tests assume the 5.42 optree shape
     CONFIGURE_REQUIRES => {
         'ExtUtils::MakeMaker' => '6.64',
     },
@@ -79,9 +79,9 @@ WriteMakefile(
     clean => { FILES => 'LibPerlRs-Inspect-*.tar.gz' },
 );
 
-# MY:: の override 群。SUPER:: はコンパイル時のパッケージ基準で解決される
-# ため、`sub MY::install {...}` (package main のまま) では SUPER が main を
-# 指してしまう。必ず package MY ブロック内で定義する。
+# MY:: overrides. SUPER:: is resolved relative to the package at compile
+# time, so `sub MY::install {...}` (while still in package main) would make
+# SUPER point at main. Always define these inside a package MY block.
 package MY;
 
 sub postamble {
@@ -89,24 +89,24 @@ sub postamble {
     return sprintf <<'POSTAMBLE', $cargo;
 # ---- Rust cdylib (cargo workspace) ------------------------------------
 CARGO              = %s
-# `make debug` で dev プロファイルに切り替わる (下記 debug ターゲット参照)
+# `make debug` switches to the dev profile (see the debug target below)
 CARGO_PROFILE      = release
 RUST_TARGET_SUBDIR = release
-# 依存を更新したい時は `make CARGO_BUILD_FLAGS=` で --locked を外す
+# To update dependencies, drop --locked with `make CARGO_BUILD_FLAGS=`
 CARGO_BUILD_FLAGS  = --locked
 RUST_DYLIB         = target/$(RUST_TARGET_SUBDIR)/libinspect_xs.$(SO)
 INST_RUSTDYLIB     = $(INST_ARCHAUTODIR)/$(DLBASE).$(DLEXT)
 DEBUG_MARKER       = $(INST_ARCHAUTODIR)/.debug-build
 
-# EUMM: all -> pure_all -> linkext -> dynamic (双コロンで追記)。
-# cargo_build は常時実行し、鮮度判定は cargo に委ねる。staging (cp) も
-# 同一レシピで無条件に行う: プロファイル切替をまたぐと mtime 比較が
-# 不健全になるため、file ルールにはしない。
+# EUMM: all -> pure_all -> linkext -> dynamic (appended with double colon).
+# cargo_build always runs; freshness is left to cargo. Staging (cp) is also
+# done unconditionally in the same recipe: mtime comparison becomes unsound
+# across profile switches, so this is deliberately not a file rule.
 dynamic :: cargo_build
 	$(NOECHO) $(NOOP)
 
-# PERL=... は libperl-config >= 0.3.3 が参照。PATH 前置は 0.3.2 以前用の保険。
-# 注: EUMM の $(FULLPERL) はクォート込みで展開されるので、ここでは重ねない。
+# PERL=... is read by libperl-config >= 0.3.3; the PATH prefix is a fallback for <= 0.3.2.
+# Note: EUMM expands $(FULLPERL) with quotes included, so do not quote it again here.
 cargo_build ::
 	PERL=$(FULLPERL) PATH="`dirname $(FULLPERL)`:$$PATH" \
 	  $(CARGO) build -p inspect-xs --profile $(CARGO_PROFILE) $(CARGO_BUILD_FLAGS)
@@ -116,12 +116,12 @@ cargo_build ::
 	$(NOECHO) sh -c 'if test "$(CARGO_PROFILE)" = release; \
 	  then rm -f $(DEBUG_MARKER); else touch $(DEBUG_MARKER); fi'
 
-# 開発用: dev プロファイルで all (staging 含む) を回す。テストは prove -b t/
+# Development: run all (including staging) with the dev profile. Test with prove -b t/
 debug ::
 	$(MAKE) all CARGO_PROFILE=dev RUST_TARGET_SUBDIR=debug
 
-# make install の前提検査 (MY::install が pure_*_install の all をこれに
-# 差し替える): staging 済みで、かつ release ビルドであること。
+# Precondition check for make install (MY::install substitutes this for
+# pure_*_install's all): blib must be staged, and it must be a release build.
 blib_ready ::
 	$(NOECHO) sh -c 'test -f $(INST_RUSTDYLIB) || \
 	  { echo "*** blib is not staged yet. Run \"make\" (and \"make test\") first." >&2; exit 1; }'
@@ -130,8 +130,8 @@ blib_ready ::
 
 .PHONY: cargo_build debug blib_ready
 
-# clean で target/ ごと削除 (realclean :: clean 依存なので realclean も同様)。
-# 次のビルドは bindgen/macrogen 込みのフルビルドになる点に注意。
+# clean removes all of target/ (realclean :: depends on clean, so it does too).
+# Note that the next build will be a full build including bindgen/macrogen.
 clean ::
 	$(CARGO) clean
 POSTAMBLE
@@ -140,9 +140,10 @@ POSTAMBLE
 sub install {
     my $self = shift;
     my $section = $self->SUPER::install(@_);
-    # install 連鎖からビルド (all) を切り離す: `sudo make install` で cargo を
-    # 走らせない (root では CARGO_HOME が変わり全再ビルド + root 所有の
-    # target/ 汚染になる)。代わりに blib_ready で staged 済み release かを検査。
+    # Detach the build (all) from the install chain: `sudo make install` must
+    # not run cargo (as root, CARGO_HOME changes, forcing a full rebuild and
+    # polluting target/ with root-owned files). Check via blib_ready instead
+    # that a release build has been staged.
     $section =~ s/^(pure_(?:perl|site|vendor)_install ::) all\b/$1 blib_ready/mg;
     $section =~ s/^(doc_(?:perl|site|vendor)_install ::) all\b/$1/mg;
     return $section;

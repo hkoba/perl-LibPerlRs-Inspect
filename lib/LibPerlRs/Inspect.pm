@@ -9,8 +9,8 @@ XSLoader::load('LibPerlRs::Inspect', $VERSION);
 
 require JSON::PP;
 
-# XS 側の String 返却は UTF8 フラグ付きの文字列 (バイト列ではない) なので
-# decode_json ではなく文字列モードの decode を使う
+# Strings returned from the XS side carry the UTF8 flag (they are not byte
+# strings), so use string-mode decode rather than decode_json
 my $_json = JSON::PP->new;
 
 sub op_names {
@@ -23,8 +23,8 @@ sub capture {
     $_json->decode(capture_json($code));
 }
 
-# analyze() は XS 側がネイティブの hashref を直接返す (JSON 経由なし)。
-# JSON 文字列が欲しい場合は analyze_json() を使う。
+# analyze() returns a native hashref directly from the XS side (no JSON round trip).
+# Use analyze_json() if you want the JSON string.
 
 1;
 __END__

@@ -1,8 +1,8 @@
-//! 戻り値・例外仕様の推定:
-//!   - 明示的な `return` (行番号・値の形状・式)
-//!   - 暗黙の最終式
-//!   - `die` / Carp::croak / Carp::confess による例外
-//!   - `wantarray` 使用の有無 (コンテキスト依存の目印)
+//! Return value / exception spec inference:
+//!   - explicit `return` (line number, value shape, expressions)
+//!   - the implicit final expression
+//!   - exceptions via `die` / Carp::croak / Carp::confess
+//!   - whether `wantarray` is used (a marker of context dependence)
 
 use serde::{Deserialize, Serialize};
 
@@ -72,8 +72,8 @@ pub fn analyze_returns(ir: &SubIr) -> RetSpec {
         _ => {}
     });
 
-    // 暗黙の最終式: 本体 lineseq の最後の文が return や制御構造で
-    // なければ、それが戻り値になる
+    // implicit final expression: if the last statement of the body lineseq is
+    // not a return or a control structure, it becomes the return value
     if let Some((line, last)) = super::statements(ir).into_iter().last() {
         let l = last.skip_null();
         if !matches!(
@@ -95,7 +95,7 @@ pub fn analyze_returns(ir: &SubIr) -> RetSpec {
     }
 }
 
-/// return / die (LISTOP) の pushmark 以外の子を描画
+/// Render the non-pushmark children of a return / die (LISTOP)
 pub(crate) fn return_exprs(ir: &SubIr, n: &OpNode) -> Vec<String> {
     n.kids
         .iter()
@@ -105,7 +105,7 @@ pub(crate) fn return_exprs(ir: &SubIr, n: &OpNode) -> Vec<String> {
         .collect()
 }
 
-/// entersub が croak/confess (Carp) 呼び出しなら (via, message) を返す
+/// If the entersub is a croak/confess (Carp) call, return (via, message)
 pub(crate) fn croak_call(ir: &SubIr, n: &OpNode) -> Option<(String, Option<String>)> {
     let mut via: Option<String> = None;
     let mut args: Vec<String> = Vec::new();
@@ -122,7 +122,7 @@ pub(crate) fn croak_call(ir: &SubIr, n: &OpNode) -> Option<(String, Option<Strin
                     }
                 }
                 "null" => scan(ir, k, via, args),
-                "entersub" => {} // ネストした呼び出しの中までは見ない
+                "entersub" => {} // do not look inside nested calls
                 _ => args.push(render(ir, k)),
             }
         }

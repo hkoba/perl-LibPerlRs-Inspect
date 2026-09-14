@@ -1,22 +1,22 @@
-//! perl-inspect — LibPerlRs::Inspect の CLI フロントエンド (MVP)。
+//! perl-inspect — CLI front end for LibPerlRs::Inspect (MVP).
 //!
-//! roadmap (libperl-rs/docs/plan/roadmap-next-projects-2026-08.md §3.2)
-//! の MVP 5 項目を実装する:
-//!   1. 対象を使い捨て埋め込みインタプリタで compile-not-run
-//!      (`Perl::parse` のみ。BEGIN/use は走る — 信頼モデルは `perl -c` と
-//!      同一。`Perl::run` は呼ばない)
-//!   2. stash walk + **由来タグ** (file / imported / xs)
-//!   3. CV ごとの file / 行範囲 / prototype
-//!   4. file 定義 sub の argspec (inspect-core の解析パス)
-//!   5. `schema_version` 付き JSON (stdout)
+//! Implements the 5 MVP items of the roadmap
+//! (libperl-rs/docs/plan/roadmap-next-projects-2026-08.md §3.2):
+//!   1. compile-not-run the target in a throwaway embedded interpreter
+//!      (`Perl::parse` only. BEGIN/use do run — the trust model is the same
+//!      as `perl -c`. `Perl::run` is never called)
+//!   2. stash walk + **provenance tags** (file / imported / xs)
+//!   3. file / line range / prototype per CV
+//!   4. argspec of file-defined subs (inspect-core's analysis pass)
+//!   5. JSON with `schema_version` (stdout)
 //!
-//! 使い方 (残余引数はそのまま perl_parse に渡す):
+//! Usage (the remaining arguments are passed to perl_parse as-is):
 //!   perl-inspect [--deep] lib/Foo.pm
 //!   perl-inspect [--deep] -e 'sub add { my ($x, $y) = @_; $x + $y }'
 //!   perl-inspect [--deep] -Ilib script.pl
 //!
-//! `--deep` は argspec に代えて全解析レポート
-//! (args / returns / logic / types / lints) を各 sub に埋め込む。
+//! `--deep` embeds the full analysis report
+//! (args / returns / logic / types / lints) in each sub instead of argspec.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -52,18 +52,18 @@ fn main() -> ExitCode {
         return usage();
     }
 
-    // 残余引数を perl の argv として渡す。環境は素通し (PERL5LIB 等が
-    // 効くように)。
+    // Pass the remaining arguments as perl's argv. The environment is passed
+    // through untouched (so that PERL5LIB etc. take effect).
     let mut perl_args = vec!["perl-inspect".to_string()];
     perl_args.extend(rest);
     let envp: Vec<String> = env::vars().map(|(k, v)| format!("{k}={v}")).collect();
 
     let mut perl = Perl::new();
-    // parse 中の BEGIN を PL_beginav_save に退避させる (use 抽出用、M2)
+    // Save BEGINs that run during parse into PL_beginav_save (for use extraction, M2)
     inspect_capture::enable_begin_capture(&perl);
     let rc = perl.parse(&perl_args, &envp);
     if rc != 0 {
-        // compile エラー本文は perl 自身が stderr へ出している
+        // perl itself has already printed the compile error body to stderr
         eprintln!("perl-inspect: compilation failed (perl_parse rc={rc})");
         return ExitCode::FAILURE;
     }
@@ -71,7 +71,7 @@ fn main() -> ExitCode {
     let sv0 = perl.get_sv("0", 0).expect("$0 is always set after parse");
     let main_file = String::from_utf8_lossy(sv0.pv(&perl)).into_owned();
 
-    // package → sub 名 → entry (BTreeMap で出力順を決定的に)
+    // package → sub name → entry (BTreeMap makes the output order deterministic)
     let mut pkgs: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
     let mut walker = StashWalker::new(&perl);
     walker.walk("main", &mut |e| {
@@ -86,8 +86,8 @@ fn main() -> ExitCode {
         .map(|(pkg, subs)| (pkg, json!({ "subs": subs })))
         .collect();
 
-    // use 抽出は stash walk の**後**に行う: B::Deparse の require が
-    // symbol table を汚染するため (inspect-capture begins.rs の注意書き)
+    // use extraction is done **after** the stash walk: requiring B::Deparse
+    // pollutes the symbol table (see the note in inspect-capture begins.rs)
     let (uses, opaque_begins, uses_error) =
         match inspect_capture::file_begins(&perl, &main_file) {
             Ok(fb) => {
@@ -128,10 +128,11 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// 1 つの sub のレポートエントリを構築する。
+/// Build the report entry for a single sub.
 ///
-/// 由来タグ: XSUB → "xs"、CvFILE が対象ファイル → "file"、それ以外
-/// (他モジュールから import されたもの・別ファイル定義) → "imported"。
+/// Provenance tag: XSUB → "xs", CvFILE equal to the target file → "file",
+/// anything else (imported from another module / defined in another file)
+/// → "imported".
 fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
     let cv = e.cv;
     let file = cv.file();
@@ -151,8 +152,8 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
     if let Some(p) = cv.proto() {
         m.insert("prototype".into(), json!(p));
     }
-    // glob の作成位置 (import 追跡の手がかり)。単純 sub は RV→CV 形で
-    // stash に置かれ glob を持たない (gv: None) ことに注意。
+    // Where the glob was created (a clue for tracking imports). Note that
+    // simple subs are stored in the stash as RV→CV and have no glob (gv: None).
     if let Some(gv) = &e.gv {
         if let (Some(gf), Some(gl)) = (gv.file(), gv.line()) {
             m.insert("gv".into(), json!({ "file": gf, "line": gl }));

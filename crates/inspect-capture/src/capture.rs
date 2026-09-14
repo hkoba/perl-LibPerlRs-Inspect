@@ -1,7 +1,8 @@
-//! 2 パスキャプチャ: pass 1 で木を歩き pre-order id を採番しつつ
-//! OpNode を構築、pass 2 で op_next / op_other / LOOP 分岐先の生ポインタを
-//! ノード id へ解決する。実行順チェーンが IR 内に閉じるので、以降の
-//! CFG 構築は純 Rust (inspect-core) でできる。
+//! Two-pass capture: pass 1 walks the tree, assigning pre-order ids while
+//! building OpNodes; pass 2 resolves the raw pointers of op_next / op_other /
+//! LOOP branch targets into node ids. The execution-order chain is then
+//! closed within the IR, so the subsequent CFG construction can be done in
+//! pure Rust (inspect-core).
 
 use std::collections::HashMap;
 
@@ -13,7 +14,7 @@ use libperl_sys::{
 
 use crate::raw::*;
 
-/// 実行順 (CvSTART → op_next) の op 名リスト。M0 の op_names の実体。
+/// List of op names in execution order (CvSTART → op_next). The substance of M0's op_names.
 pub fn exec_op_names(cv: Cv) -> Result<Vec<String>, String> {
     let Some(start) = cv.start_op() else {
         return Err("cannot analyze an XSUB (no op tree)".into());
@@ -24,7 +25,7 @@ pub fn exec_op_names(cv: Cv) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// coderef の OP ツリー全体を SubIr に写し取る
+/// Copy the coderef's entire OP tree into a SubIr
 pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
     if cv.is_xsub() {
         return Err("cannot analyze an XSUB (no op tree)".into());
@@ -61,7 +62,7 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
     })
 }
 
-/// pass 2 用に温存する生ポインタ (id と同順で raws に積む)
+/// Raw pointers kept for pass 2 (pushed onto raws in the same order as ids)
 struct RawLinks {
     next: *const op,
     other: *const op,
@@ -80,7 +81,7 @@ struct Capturer {
 }
 
 impl Capturer {
-    /// pass 1: pre-order で OpNode を構築
+    /// pass 1: build OpNodes in pre-order
     fn walk(&mut self, o: *const op) -> OpNode {
         let id = self.raws.len() as u32;
         self.ids.insert(o as usize, id);
@@ -112,7 +113,7 @@ impl Capturer {
         }
         self.raws.push(raw);
 
-        // OP_NULL (op_type == 0) は null 化前の型を op_targ に持つ
+        // OP_NULL (op_type == 0) keeps its pre-nulling type in op_targ
         let was = if ty == 0 && targ > 0 {
             Some(op_name_of_type(targ as u16))
         } else {
@@ -162,7 +163,7 @@ impl Capturer {
                 let sv = {
                     let p = unsafe { (*s).op_sv };
                     if p.is_null() {
-                        // ithreads: const SV は pad に置かれる
+                        // ithreads: const SVs are placed in the pad
                         PAD_BASE_SV(self.cv.padlist(), unsafe { (*o).op_targ })
                     } else {
                         p as *const sv
@@ -171,14 +172,14 @@ impl Capturer {
                 sv_detail(sv)
             }
             OPclass::OPclass_PADOP => {
-                // ithreads: GV 参照は PADOP になり pad 経由で解決する
+                // ithreads: GV references become PADOPs and are resolved via the pad
                 let p = o as *const padop;
                 let sv = PAD_BASE_SV(self.cv.padlist(), unsafe { (*p).op_padix });
                 sv_detail(sv)
             }
             OPclass::OPclass_METHOP => {
                 if (flags as u32 & OPf_KIDS) != 0 {
-                    OpDetail::Method { name: None } // 動的メソッド
+                    OpDetail::Method { name: None } // dynamic method
                 } else {
                     let m = o as *const methop;
                     let sv = {
@@ -200,7 +201,7 @@ impl Capturer {
                 redo: None,
                 next: None,
                 last: None,
-            }, // pass 2 で解決
+            }, // resolved in pass 2
             OPclass::OPclass_PMOP => OpDetail::Pm { pattern: None },
             OPclass::OPclass_UNOP_AUX => {
                 let aux = unsafe { (*(o as *const libperl_sys::unop_aux)).op_aux };
@@ -222,10 +223,10 @@ impl Capturer {
                             }
                         }
                     }
-                    // pp_argelem は op_aux ポインタの値そのものを添字に使う
+                    // pp_argelem uses the op_aux pointer value itself as the index
                     "argelem" => OpDetail::ArgElem { index: aux as u64 },
                     "multideref" => self.decode_multideref(aux),
-                    // multiconcat 等は未デコード (op 名を目印に残す)
+                    // multiconcat etc. are not decoded (keep the op name as a marker)
                     other => OpDetail::Aux(other.to_string()),
                 }
             }
@@ -233,14 +234,15 @@ impl Capturer {
         }
     }
 
-    /// multideref の aux 配列をデコードする。
+    /// Decode the aux array of multideref.
     ///
-    /// 形式は op.h (5.22 以降安定): 先頭アイテムが actions ワードで、
-    /// 7 bit ごとに 1 アクション。各アクションは低 4 bit が base 種別、
-    /// 0x30 が添字種別、0x40 が最終要素フラグ。base/添字の種別に応じて
-    /// 後続アイテム (pad_offset / sv / iv) を消費する。
+    /// The format is that of op.h (stable since 5.22): the first item is the
+    /// actions word, one action per 7 bits. In each action the low 4 bits are
+    /// the base kind, 0x30 the index kind, and 0x40 the last-element flag.
+    /// Subsequent items (pad_offset / sv / iv) are consumed according to the
+    /// base/index kinds.
     fn decode_multideref(&self, aux: *mut libperl_sys::UNOP_AUX_item) -> OpDetail {
-        // libperl-sys 生成の MDEREF_* (u32) を actions (UV=u64) 幅に合わせる
+        // Widen the libperl-sys-generated MDEREF_* (u32) to the actions width (UV=u64)
         const MDEREF_ACTION_MASK: u64 = libperl_sys::MDEREF_ACTION_MASK as u64;
         const MDEREF_INDEX_MASK: u64 = libperl_sys::MDEREF_INDEX_MASK as u64;
         const MDEREF_INDEX_CONST: u64 = libperl_sys::MDEREF_INDEX_const as u64;
@@ -256,11 +258,11 @@ impl Capturer {
         unsafe {
             let mut items = aux;
             let mut actions = (*items).uv;
-            // 暴走防止 (実際のチェーンは高々数段)
+            // Runaway guard (real chains are at most a few steps)
             while steps.len() < 64 {
                 let kind = actions & MDEREF_ACTION_MASK;
                 if kind == 0 {
-                    // MDEREF_reload: 次のアイテムが新しい actions ワード
+                    // MDEREF_reload: the next item is a new actions word
                     items = items.add(1);
                     actions = (*items).uv;
                     if actions == 0 {
@@ -281,8 +283,8 @@ impl Capturer {
                     11 => ("hash", "chain"),
                     12 => ("hash", "padhv"),
                     13 => ("hash", "gvhv"),
-                    // 未知のアクション: 以降のアイテム境界が分からないので
-                    // 打ち切り、デコード済みぶんだけ返す
+                    // Unknown action: the boundaries of subsequent items are
+                    // unknown, so stop here and return what has been decoded
                     _ => break,
                 };
                 let (base_targ, base_name) = match base {
@@ -332,7 +334,7 @@ impl Capturer {
                             _ => None,
                         }
                     }
-                    _ => None, // INDEX_none: 添字は先行 op が計算
+                    _ => None, // INDEX_none: the index is computed by a preceding op
                 };
                 steps.push(DerefStep {
                     container: container.into(),
@@ -350,21 +352,21 @@ impl Capturer {
         OpDetail::MultiDeref { steps }
     }
 
-    /// UNOP_AUX アイテムから SV を取り出す。ithreads では SV アイテムは
-    /// pad オフセットとして格納される (perl.h の UNOP_AUX_item_sv マクロ:
-    /// `PAD_SVl((item)->pad_offset)`)。本プロジェクトは threaded perl
-    /// 前提 (非 threaded では (*item).sv を直接読む形になる)
+    /// Extract the SV from a UNOP_AUX item. Under ithreads, SV items are
+    /// stored as pad offsets (the UNOP_AUX_item_sv macro in perl.h:
+    /// `PAD_SVl((item)->pad_offset)`). This project assumes a threaded perl
+    /// (on a non-threaded perl this would read (*item).sv directly)
     unsafe fn aux_item_sv(&self, item: *const libperl_sys::UNOP_AUX_item) -> *const sv {
         PAD_BASE_SV(self.cv.padlist(), unsafe { (*item).pad_offset })
     }
 
-    /// pad index から変数名を引く (multideref の padsv 添字表示用)
+    /// Look up a variable name by pad index (for displaying multideref padsv indices)
     fn pad_name_at(&self, po: u64) -> Option<String> {
         let pn = self.cv.pad_names().nth(po as usize)??;
         pn.pv().filter(|s| !s.is_empty())
     }
 
-    /// pass 2: 生ポインタをノード id に解決
+    /// pass 2: resolve raw pointers into node ids
     fn resolve(&self, node: &mut OpNode) {
         let raw = &self.raws[node.id as usize];
         node.next = self.lookup(raw.next);
@@ -416,13 +418,14 @@ fn sv_detail(sv: *const sv) -> OpDetail {
     }
 }
 
-/// SV をリテラル値として写し取る (公式 API のみで構成)
+/// Copy an SV out as a literal value (built from the official API only)
 fn sv_lit(sv: *const sv) -> SvLit {
     if sv.is_null() {
         return SvLit::Other("NULL".into());
     }
-    // GP 付き glob (libperl-rs の Gv が isGV_with_GP で判定) を最優先。
-    // PVCV/REGEXP と排他なので判定順の入替えに意味差はない。
+    // Globs with a GP (libperl-rs's Gv checks via isGV_with_GP) take top
+    // priority. Mutually exclusive with PVCV/REGEXP, so the check order does
+    // not matter semantically.
     if let Some(gv) = Gv::from_sv(sv as *mut _) {
         return SvLit::Glob {
             name: gv.name().unwrap_or_default(),
@@ -455,7 +458,7 @@ fn sv_lit(sv: *const sv) -> SvLit {
             if pv.is_null() {
                 SvLit::Undef
             } else {
-                // NUL を含みうるので SvCUR ぶんを読む
+                // May contain NUL, so read SvCUR bytes
                 let len = libperl_sys::SvCUR(sv);
                 let bytes = std::slice::from_raw_parts(pv as *const u8, len as usize);
                 SvLit::Pv(String::from_utf8_lossy(bytes).into_owned())
@@ -466,14 +469,14 @@ fn sv_lit(sv: *const sv) -> SvLit {
     }
 }
 
-/// 名前付き pad エントリを収集 (targ → 名前/宣言型のテーブル)
+/// Collect named pad entries (table of targ → name / declared type)
 fn capture_pad(cv: Cv) -> Vec<PadEntry> {
     let mut out = Vec::new();
     for (ix, slot) in cv.pad_names().enumerate() {
         let Some(pn) = slot else { continue };
         let name = pn.pv();
         if name.as_deref().is_none_or(str::is_empty) {
-            continue; // 無名スロット (一時領域・const 用) は載せない
+            continue; // unnamed slots (temporaries / consts) are not listed
         }
         out.push(PadEntry {
             ix: ix as u32,

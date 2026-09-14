@@ -1,19 +1,20 @@
-//! lint 検出。v0 は take1 の Project.md にあるテーマから
-//! `my $var = EXPR if COND;` (条件付き my) を実装する。
+//! Lint detection. v0 implements `my $var = EXPR if COND;` (conditional my),
+//! one of the themes from take1's Project.md.
 //!
-//! この構文は条件不成立時に変数が前回呼び出しの値を保持しうる
-//! 悪名高いパターン (perldoc perlsyn も「未定義動作」扱い)。
-//! optree 上は「文のトップが and/or/dor で、その分岐側に
-//! OPpLVAL_INTRO 付きの pad intro op が裸で現れる」形になる。
-//! ブロック形 `if (COND) { my $x = ...; }` は分岐側が lineseq/scope
-//! (中に COP) になるので、そこで枝刈りして誤検出を避ける。
+//! This construct is a notorious pattern where, when the condition is false,
+//! the variable may retain its value from the previous call (perldoc perlsyn
+//! also treats it as "undefined behavior"). In the optree it appears as
+//! "the statement's top op is and/or/dor, and a pad intro op with
+//! OPpLVAL_INTRO appears bare on the branch side". The block form
+//! `if (COND) { my $x = ...; }` has a lineseq/scope (containing a COP) on the
+//! branch side, so we prune there to avoid false positives.
 
 use serde::{Deserialize, Serialize};
 
 use crate::ir::{OpClass, OpNode, SubIr};
 
-/// op_private の OPpLVAL_INTRO (pad 系 op と padrange で bit 7)。
-/// IR は Perl バージョン固定なので定数をここに持つ
+/// OPpLVAL_INTRO in op_private (bit 7 for pad ops and padrange).
+/// The IR is pinned to a Perl version, so the constant lives here
 const OPP_LVAL_INTRO: u8 = 0x80;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,7 +24,7 @@ pub struct LintsSpec {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Lint {
-    /// 安定 id (例: "my-in-conditional-statement")
+    /// Stable id (e.g. "my-in-conditional-statement")
     pub id: String,
     /// error | warning
     pub severity: String,
@@ -41,7 +42,7 @@ pub fn analyze_lints(ir: &SubIr) -> LintsSpec {
         if !matches!(top.name.as_str(), "and" | "or" | "dor") || top.kids.len() < 2 {
             continue;
         }
-        // kids[0] は条件。分岐側 (kids[1..]) に裸の pad intro を探す
+        // kids[0] is the condition. Look for a bare pad intro on the branch side (kids[1..])
         for branch in &top.kids[1..] {
             let mut hits = Vec::new();
             find_bare_intro(ir, branch, &mut hits);
@@ -51,8 +52,8 @@ pub fn analyze_lints(ir: &SubIr) -> LintsSpec {
                     severity: "error".into(),
                     line,
                     message: format!(
-                        "`my {} = EXPR {} COND` は条件不成立時に {} が\
-                         前回の値を保持しうる (perlsyn で非推奨の構文)",
+                        "`my {} = EXPR {} COND` may leave {} holding its previous value \
+                         when COND is false (deprecated per perlsyn)",
                         var,
                         if top.name == "or" { "unless" } else { "if" },
                         var,
@@ -66,8 +67,8 @@ pub fn analyze_lints(ir: &SubIr) -> LintsSpec {
     LintsSpec { lints }
 }
 
-/// スコープ境界 (lineseq / scope / enter* / leave* / COP) を越えずに
-/// 到達できる OPpLVAL_INTRO 付き pad intro op を集める
+/// Collect pad intro ops with OPpLVAL_INTRO that are reachable without
+/// crossing a scope boundary (lineseq / scope / enter* / leave* / COP)
 fn find_bare_intro(ir: &SubIr, n: &OpNode, out: &mut Vec<String>) {
     if n.class == OpClass::Cop
         || n.name == "lineseq"
@@ -86,7 +87,7 @@ fn find_bare_intro(ir: &SubIr, n: &OpNode, out: &mut Vec<String>) {
             out.push(name.to_string());
         }
     }
-    // padrange は private の bit 7 が intro、targ が先頭 pad ix
+    // for padrange, bit 7 of private is intro and targ is the first pad ix
     if n.name == "padrange" && n.private & OPP_LVAL_INTRO != 0 {
         if let Some(name) = ir.pad_name(n.targ) {
             out.push(name.to_string());

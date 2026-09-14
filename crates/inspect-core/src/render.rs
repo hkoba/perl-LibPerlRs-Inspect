@@ -1,9 +1,10 @@
-//! ミニ deparser — 小さな式サブツリーを Perl 風の文字列に描画する。
+//! Mini deparser — renders small expression subtrees as Perl-like strings.
 //!
-//! B::Deparse の完全再実装ではない。デフォルト値・return 式・
-//! ガード条件の原子式など「人に見せる短い式」を対象にした部分集合。
-//! op を追加するときは /usr/share/perl5/B/Deparse.pm の該当 pp_* を
-//! 参照すること。未対応 op は `<opname>` にフォールバックする。
+//! Not a full reimplementation of B::Deparse. A subset aimed at "short
+//! expressions shown to humans": default values, return expressions, atomic
+//! guard conditions, and the like. When adding an op, consult the
+//! corresponding pp_* in /usr/share/perl5/B/Deparse.pm. Unsupported ops
+//! fall back to `<opname>`.
 
 use crate::ir::{OpDetail, OpNode, SubIr, SvLit};
 
@@ -33,7 +34,7 @@ pub fn render(ir: &SubIr, node: &OpNode) -> String {
         "rv2hv" => prefix_deref('%', ir, n),
         "rv2sv" => prefix_deref('$', ir, n),
         "aelemfast" => match &n.detail {
-            // 添字は op_private に埋め込まれる
+            // the index is embedded in op_private
             OpDetail::Gv { name, stash } => {
                 let base = sigil_gv('$', name, stash.as_deref());
                 format!("{}[{}]", base, n.private as i8)
@@ -84,7 +85,7 @@ pub fn render(ir: &SubIr, node: &OpNode) -> String {
         "sassign" => format!("{} = {}", kid_str(ir, n, 1), kid_str(ir, n, 0)),
         "shift" | "pop" => {
             if n.kids.is_empty() {
-                // sub 内の裸の shift/pop は @_ が対象
+                // a bare shift/pop inside a sub operates on @_
                 format!("{}(@_)", n.name)
             } else {
                 format!("{}({})", n.name, kid_str(ir, n, 0))
@@ -161,7 +162,7 @@ fn kid_str(ir: &SubIr, n: &OpNode, i: usize) -> String {
         .unwrap_or_else(|| "<?>".into())
 }
 
-/// pushmark を除いた子の描画リスト
+/// Rendered list of children, excluding pushmark
 fn kid_list(ir: &SubIr, n: &OpNode) -> Vec<String> {
     n.kids
         .iter()
@@ -171,7 +172,7 @@ fn kid_list(ir: &SubIr, n: &OpNode) -> Vec<String> {
         .collect()
 }
 
-/// multideref チェーンの描画: `$x->[0]{k}` / `$arr[0]` / `$h{k}` 等
+/// Render a multideref chain: `$x->[0]{k}` / `$arr[0]` / `$h{k}` etc.
 pub(crate) fn render_mderef(ir: &SubIr, steps: &[crate::ir::DerefStep]) -> String {
     let mut out = String::new();
     for (i, s) in steps.iter().enumerate() {
@@ -185,7 +186,7 @@ pub(crate) fn render_mderef(ir: &SubIr, steps: &[crate::ir::DerefStep]) -> Strin
         };
         match s.base.as_str() {
             "padsv" => {
-                // $x->[...] : ref を持つ lexical の deref
+                // $x->[...] : deref of a lexical holding a ref
                 let name = s
                     .base_targ
                     .and_then(|t| ir.pad_name(t).map(String::from))
@@ -193,7 +194,7 @@ pub(crate) fn render_mderef(ir: &SubIr, steps: &[crate::ir::DerefStep]) -> Strin
                 out.push_str(&format!("{}->{}", name, subscript(&s.key)));
             }
             "padav" | "padhv" => {
-                // $arr[...] / $h{...} : 集合 lexical の要素直接アクセス
+                // $arr[...] / $h{...} : direct element access on an aggregate lexical
                 let name = s
                     .base_targ
                     .and_then(|t| ir.pad_name(t).map(String::from))
@@ -210,7 +211,7 @@ pub(crate) fn render_mderef(ir: &SubIr, steps: &[crate::ir::DerefStep]) -> Strin
                 s.base_name.as_deref().unwrap_or("?"),
                 subscript(&s.key)
             )),
-            // chain: 直前ステップの結果への添字 (arrow 省略記法)
+            // chain: subscript on the previous step's result (arrow-omitted form)
             "chain" if i > 0 => out.push_str(&subscript(&s.key)),
             _ => out.push_str(&format!("<expr>{}", subscript(&s.key))),
         }
@@ -222,9 +223,9 @@ pub(crate) fn render_mderef(ir: &SubIr, steps: &[crate::ir::DerefStep]) -> Strin
     }
 }
 
-/// entersub の描画: `f(args)` / `$obj->meth(args)`
+/// Render an entersub: `f(args)` / `$obj->meth(args)`
 fn render_call(ir: &SubIr, n: &OpNode) -> String {
-    // entersub の子 (null 透過) から GV (呼び先) とメソッド op を探す
+    // look through the entersub's children (skipping nulls) for the GV (callee) and method op
     let mut args: Vec<String> = Vec::new();
     let mut callee: Option<String> = None;
     let mut method: Option<String> = None;

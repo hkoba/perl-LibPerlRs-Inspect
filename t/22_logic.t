@@ -10,13 +10,13 @@ sub logic_of {
     LibPerlRs::Inspect::analyze($code)->{logic};
 }
 
-# when を [[cond添字, 0/1], ...] に正規化 (JSON::PP::Boolean 対策)
+# Normalize `when` to [[cond_index, 0/1], ...] (works around JSON::PP::Boolean)
 sub whens {
     my ($p) = @_;
     [map { [$_->{cond}, $_->{value} ? 1 : 0] } @{$p->{when}}];
 }
 
-# 真理値表から inputs が一致する行の path 添字を引く
+# Look up the path index of the truth-table row whose inputs match
 sub table_path {
     my ($l, @in) = @_;
   ROW: for my $r (@{$l->{table}}) {

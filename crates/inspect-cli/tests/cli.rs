@@ -1,6 +1,6 @@
-//! perl-inspect CLI の end-to-end テスト: バイナリを spawn して JSON を
-//! 検証する (CARGO_BIN_EXE_* は cargo が bin クレートの統合テストに
-//! 提供するパス)。
+//! End-to-end tests for the perl-inspect CLI: spawn the binary and verify
+//! the JSON (CARGO_BIN_EXE_* is the path cargo provides to integration
+//! tests of bin crates).
 
 use std::process::Command;
 
@@ -37,7 +37,7 @@ fn mvp_json_report() {
     assert_eq!(v["file"], "-e");
     assert_eq!(v["perl"]["threaded"], cfg!(perl_useithreads));
 
-    // file 定義 sub: 由来タグ + 行範囲 + argspec
+    // file-defined sub: provenance tag + line range + argspec
     let add = &v["packages"]["Foo"]["subs"]["add"];
     assert_eq!(add["provenance"], "file");
     assert_eq!(add["file"], "-e");
@@ -52,15 +52,16 @@ fn mvp_json_report() {
         .collect();
     assert_eq!(params, ["$x", "$y"]);
 
-    // ネストしたパッケージも歩けている
+    // nested packages are walked too
     assert_eq!(
         v["packages"]["Foo::Bar"]["subs"]["nested"]["provenance"],
         "file"
     );
     assert_eq!(v["packages"]["main"]["subs"]["hello"]["provenance"], "file");
 
-    // 素の -e の compile 環境にも XS (例: mro::method_changed_in) と
-    // 他ファイル由来の sub が見えるはず — 由来タグの実効性の確認
+    // Even a bare -e compile environment should show XS subs (e.g.
+    // mro::method_changed_in) and subs from other files — confirms the
+    // provenance tags are effective
     let all_provenances: Vec<String> = v["packages"]
         .as_object()
         .expect("packages object")
@@ -83,7 +84,7 @@ sub hi { basename($0) }
 #[test]
 fn uses_extraction() {
     let v = run(&["-e", USES_SCRIPT]);
-    // use 文は BEGIN 帰属 + begin_is_use 逆変換で復元される (import 引数付き)
+    // use statements are recovered via BEGIN attribution + begin_is_use reverse conversion (with import arguments)
     let uses = v["uses"].as_array().expect("uses array");
     assert!(
         uses.iter().any(|u| {
@@ -94,15 +95,15 @@ fn uses_extraction() {
         }),
         "uses = {uses:?}"
     );
-    // use 形でない生の BEGIN は opaque_begins に行番号で載る。
-    // sitecustomize / -M 由来の line-0 注入は除外されるので、この
-    // スクリプトでは line 5 の BEGIN ちょうど 1 件になる
+    // Raw BEGINs not of use form appear in opaque_begins by line number.
+    // line-0 injections from sitecustomize / -M are excluded, so for this
+    // script there is exactly one entry: the BEGIN at line 5
     assert_eq!(
         v["opaque_begins"],
         serde_json::json!([{ "line": 5 }]),
         "opaque_begins mismatch"
     );
-    // line 0 の混入がないこと (uses 側も)
+    // no line-0 contamination (on the uses side either)
     assert!(
         !uses.iter().any(|u| u["line"] == 0),
         "line-0 injected use leaked: {uses:?}"
@@ -113,7 +114,7 @@ fn uses_extraction() {
 fn deep_report() {
     let v = run(&["--deep", "-e", SCRIPT]);
     let add = &v["packages"]["Foo"]["subs"]["add"];
-    // --deep では argspec 単体でなく全解析レポート
+    // with --deep, the full analysis report instead of argspec alone
     assert!(add.get("args").is_none());
     assert_eq!(add["report"]["args"]["style"], "unpack");
     assert!(add["report"].get("returns").is_some());

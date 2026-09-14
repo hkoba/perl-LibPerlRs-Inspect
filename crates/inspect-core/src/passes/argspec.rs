@@ -1,8 +1,8 @@
-//! 引数仕様の推定。4 段のパターン検出 (優先順):
-//!   1. signature (argcheck/argelem) — 正確な arity が取れる
+//! Argument spec inference. Four-tier pattern detection (in priority order):
+//!   1. signature (argcheck/argelem) — yields the exact arity
 //!   2. `my (...) = @_` (aassign + rv2av *_)
-//!   3. `my $x = shift` の列 (padsv_store + shift)
-//!   4. `$_[n]` 直接アクセス — arity の下限のみ
+//!   3. a run of `my $x = shift` (padsv_store + shift)
+//!   4. direct `$_[n]` access — only a lower bound on arity
 
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,7 @@ pub struct ArgSpec {
     /// signature | unpack | shift | positional | mixed | none
     pub style: String,
     pub min_arity: u64,
-    /// None = 上限なし (slurpy or 未検査)
+    /// None = no upper bound (slurpy or unchecked)
     pub max_arity: Option<u64>,
     pub params: Vec<Param>,
     pub invocant_guess: Option<String>,
@@ -37,7 +37,7 @@ pub fn analyze_args(ir: &SubIr) -> ArgSpec {
     detect_classic(ir)
 }
 
-/// signature: null(ex-argcheck) 配下の argcheck / argelem / argdefelem
+/// signature: argcheck / argelem / argdefelem under null(ex-argcheck)
 fn detect_signature(ir: &SubIr) -> Option<ArgSpec> {
     let mut check: Option<(u64, u64, Option<char>)> = None;
     let mut params: Vec<Param> = Vec::new();
@@ -51,7 +51,7 @@ fn detect_signature(ir: &SubIr) -> Option<ArgSpec> {
             check = Some((*p, *opt, *slurpy));
         }
         OpDetail::ArgElem { index } => {
-            // デフォルト式は argelem の子 argdefelem の子
+            // the default expression is the child of the argdefelem under the argelem
             let default = node
                 .kids
                 .first()
@@ -80,15 +80,15 @@ fn detect_signature(ir: &SubIr) -> Option<ArgSpec> {
     })
 }
 
-/// 古典的パターン: 文頭から順に shift 列 / my(...)=@_ を拾い、
-/// 全体から $_[n] を拾う
+/// Classic patterns: pick up the run of shifts / my(...)=@_ from the start of
+/// the body, and $_[n] from the whole tree
 fn detect_classic(ir: &SubIr) -> ArgSpec {
     let mut params: Vec<Param> = Vec::new();
     let mut styles: Vec<&str> = Vec::new();
     let mut slurpy = false;
     let mut next_index: u64 = 0;
 
-    // プリアンブル (先頭からの連続した引数取り出し文) を走査
+    // scan the preamble (the leading run of argument-extraction statements)
     for (_line, stmt) in super::statements(ir) {
         let s = stmt.skip_null();
         if let Some(name) = shift_into_pad(ir, s) {
@@ -124,10 +124,10 @@ fn detect_classic(ir: &SubIr) -> ArgSpec {
             }
             continue;
         }
-        break; // 引数取り出しでない文が来たらプリアンブル終了
+        break; // a statement that is not argument extraction ends the preamble
     }
 
-    // $_[n] 直接アクセス (ツリー全体)
+    // direct $_[n] access (whole tree)
     let mut max_elem_index: Option<i64> = None;
     super::walk_with_lines(ir, |node, _| {
         if let Some(ix) = arg_elem_index(node) {
@@ -168,13 +168,13 @@ fn detect_classic(ir: &SubIr) -> ArgSpec {
                 .is_none_or(|n| !n.starts_with('@') && !n.starts_with('%'))
         })
         .count() as u64;
-    // 古典的パターンでは必須/任意の区別は付かない。$_[n] の
-    // 無条件アクセスだけは下限の根拠になる
+    // Classic patterns cannot distinguish required from optional. Only
+    // unconditional $_[n] access gives grounds for a lower bound
     let min_arity = max_elem_index.map_or(0, |m| (m + 1).max(0) as u64);
     ArgSpec {
         style,
         min_arity,
-        // unpack で slurpy が無い場合のみ実質上限が分かる
+        // an effective upper bound is only known for unpack without a slurpy
         max_arity: if !slurpy && styles == ["unpack"] {
             Some(positional)
         } else {
@@ -185,8 +185,8 @@ fn detect_classic(ir: &SubIr) -> ArgSpec {
     }
 }
 
-/// `my $x = shift;` → padsv_store(targ=$x) の子に裸の shift
-/// (旧形式 sassign(shift, padsv) にも対応)
+/// `my $x = shift;` → padsv_store(targ=$x) with a bare shift as its child
+/// (the older form sassign(shift, padsv) is also handled)
 fn shift_into_pad(ir: &SubIr, s: &OpNode) -> Option<String> {
     match s.name.as_str() {
         "padsv_store" => {
@@ -210,15 +210,15 @@ fn shift_into_pad(ir: &SubIr, s: &OpNode) -> Option<String> {
     }
 }
 
-/// shift の対象が @_ か (裸 = @_、明示なら rv2av(gv *_) を確認)
+/// Whether the shift operates on @_ (bare = @_; if explicit, check for rv2av(gv *_))
 fn shifts_default_args(shift: &OpNode) -> bool {
     if shift.kids.is_empty() {
-        return true; // sub 内の裸の shift は @_
+        return true; // a bare shift inside a sub is on @_
     }
     subtree_has_underscore_av(shift)
 }
 
-/// `my (...) = @_;` → aassign(RHS に rv2av(*_), LHS に padsv/padav/padhv 列)
+/// `my (...) = @_;` → aassign(rv2av(*_) on the RHS, a run of padsv/padav/padhv on the LHS)
 fn unpack_from_args(ir: &SubIr, s: &OpNode) -> Option<(Vec<String>, bool)> {
     if s.name != "aassign" {
         return None;
@@ -259,7 +259,7 @@ fn collect_lhs_targets(ir: &SubIr, n: &OpNode, names: &mut Vec<String>, slurpy: 
     }
 }
 
-/// サブツリーに @_ (rv2av 配下の gv *_ / padrange 経由) が含まれるか
+/// Whether the subtree contains @_ (gv *_ under rv2av / via padrange)
 fn subtree_has_underscore_av(n: &OpNode) -> bool {
     let n = n.skip_null();
     if n.name == "rv2av" {
@@ -274,10 +274,10 @@ fn subtree_has_underscore_av(n: &OpNode) -> bool {
     n.kids.iter().any(subtree_has_underscore_av)
 }
 
-/// `$_[n]`: aelemfast (PADOP, gv *_) の op_private が添字。
-/// aelem(rv2av(*_), const n) 形もカバー
+/// `$_[n]`: the index is the op_private of aelemfast (PADOP, gv *_).
+/// The aelem(rv2av(*_), const n) form is also covered
 fn arg_elem_index(node: &OpNode) -> Option<i64> {
-    let n = node; // null 透過しない (ex-aelem の下の aelemfast は実 op)
+    let n = node; // do not skip nulls (the aelemfast under ex-aelem is the real op)
     if n.name == "aelemfast" {
         if let OpDetail::Gv { name, stash } = &n.detail {
             if name == "_" && stash.as_deref().unwrap_or("main") == "main" {

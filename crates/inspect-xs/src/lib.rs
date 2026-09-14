@@ -1,9 +1,9 @@
 //! LibPerlRs::Inspect — XS glue crate.
 //!
 //! Loaded from Perl via XSLoader as `auto/LibPerlRs/Inspect/Analyzer.so`.
-//! coderef 引数は `#[xs_sub]` の `Cv` 種別 (libperl-rs) がトランポリンで
-//! 検査する。`analyze` はネイティブの hashref を返し、`*_json` 系は
-//! スキーマ確認やデバッグ用に JSON 文字列を返す。
+//! The coderef argument is checked by the trampoline of `#[xs_sub]`'s `Cv`
+//! kind (libperl-rs). `analyze` returns a native hashref; the `*_json`
+//! variants return JSON strings for schema checks and debugging.
 
 use libperl_rs::{Av, Cv, Hv, Perl, Rv, Sv, sv_undef_ptr, xs_boot, xs_sub};
 use serde_json::Value;
@@ -54,8 +54,9 @@ fn analyze(my_perl: &Perl, code: Cv) -> Result<Rv<Hv>, String> {
     Ok(build_hv(my_perl, &map).into_rv(my_perl))
 }
 
-/// serde_json::Value → Perl データ構造。レポートの中間表現として
-/// Value を使うことで、JSON 版とネイティブ版が常に同じ形になる。
+/// serde_json::Value → Perl data structure. Using Value as the report's
+/// intermediate representation keeps the JSON and native versions always
+/// in the same shape.
 fn json_to_sv(perl: &Perl, v: &Value) -> Sv {
     match v {
         Value::Null => unsafe { Sv::from_raw_unchecked(sv_undef_ptr(perl.as_ptr())) },

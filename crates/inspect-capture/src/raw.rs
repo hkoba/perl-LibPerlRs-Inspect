@@ -1,14 +1,16 @@
-//! Perl 公式 API の薄い適応層 — libperl-rs 0.4.4 の introspection 層
-//! (Op / Cop / Gv / PadName newtype) が提供しない**残余だけ**を持つ:
-//!   - `SvTYPE` / `SvROK` / `SvRV`: 生ポインタ (`*const sv`) のまま
-//!     リテラル抽出 (capture.rs の sv_lit) が使う素通しラッパ
-//!   - `op_name_of_type`: OP_NAME は libperl-sys/skip-codegen.txt 掲載の
-//!     ため PL_op_name 配列参照で代替 (B モジュールと同じ方法)
-//!   - `PadnameFLAGS`: macrogen が引数型不明でスキップ (生成側の改良候補)
-//!   - `PAD_BASE_SV`: perl 内部マクロ相当の pad slot 解決
-//!     (libperl-rs 未提供 — 次の upstream 候補)
-//!   - METHOP の meth_sv / LOGOP の op_other / LOOP の分岐先:
-//!     公開マクロが無い (capture.rs 側で構造体参照)
+//! Thin adaptation layer over the official Perl API — holds **only the
+//! remainder** not provided by the libperl-rs 0.4.4 introspection layer
+//! (Op / Cop / Gv / PadName newtypes):
+//!   - `SvTYPE` / `SvROK` / `SvRV`: pass-through wrappers on raw pointers
+//!     (`*const sv`), used by literal extraction (sv_lit in capture.rs)
+//!   - `op_name_of_type`: OP_NAME is listed in libperl-sys/skip-codegen.txt,
+//!     so substitute a PL_op_name array lookup (same method as the B module)
+//!   - `PadnameFLAGS`: skipped by macrogen because the argument type is
+//!     unknown (candidate improvement on the generator side)
+//!   - `PAD_BASE_SV`: pad slot resolution equivalent to the perl-internal
+//!     macro (not provided by libperl-rs — next upstream candidate)
+//!   - METHOP's meth_sv / LOGOP's op_other / LOOP branch targets: no public
+//!     macros exist (accessed via struct fields in capture.rs)
 
 #![allow(non_snake_case)]
 
@@ -35,7 +37,7 @@ pub fn SvRV(sv: *const sv) -> *const sv {
 
 // ---- OP ----
 
-/// OP_NAME は skip-codegen.txt 掲載のため PL_op_name で代替
+/// OP_NAME is listed in skip-codegen.txt, so substitute PL_op_name
 pub fn op_name_of_type(ty: u16) -> String {
     unsafe { std::ffi::CStr::from_ptr(PL_op_name[ty as usize]) }
         .to_str()
@@ -45,14 +47,14 @@ pub fn op_name_of_type(ty: u16) -> String {
 
 // ---- PAD ----
 
-/// macrogen が生成をスキップしている (macro_bindings.rs でコメントアウト)
-/// ため手書き。生成側の改良候補
+/// Hand-written because macrogen skips generating it (commented out in
+/// macro_bindings.rs). Candidate improvement on the generator side
 pub fn PadnameFLAGS(pn: *const padname) -> u8 {
     unsafe { (*pn).xpadn_flags }
 }
 
-/// perl 内部マクロ PAD_BASE_SV 相当: PadlistARRAY(pl)[1] が実 pad (AV)、
-/// その po 番目。範囲外の po は null を返す
+/// Equivalent of the perl-internal macro PAD_BASE_SV: PadlistARRAY(pl)[1] is
+/// the actual pad (AV); return its po-th element. Out-of-range po returns null
 pub fn PAD_BASE_SV(pl: *const PADLIST, po: isize) -> *const SV {
     if pl.is_null() || po < 0 {
         return std::ptr::null();

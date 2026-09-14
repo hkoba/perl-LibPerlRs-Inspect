@@ -16,7 +16,7 @@ sub var_of {
     $v;
 }
 
-subtest 'arrayref vs hashref conflict (受入条件)' => sub {
+subtest 'arrayref vs hashref conflict (acceptance)' => sub {
     my $t = types_of('sub { my ($x) = @_; $x->[0] + $x->{k} }');
     my $x = var_of($t, '$x');
     ok $x, 'var $x reported' or diag explain $t;
@@ -35,7 +35,7 @@ subtest 'declared type via PadnameTYPE (my TFoo $x)' => sub {
     is $x->{declared_type}, 'TFoo', 'declared_type captured';
 };
 
-subtest 'method inventory (typo 検出の下地)' => sub {
+subtest 'method inventory (groundwork for typo detection)' => sub {
     my $t = types_of('sub { my ($obj) = @_; $obj->frobnicate(1); $obj->save }');
     my $o = var_of($t, '$obj');
     ok $o, 'var $obj reported' or diag explain $t;
@@ -59,6 +59,7 @@ subtest 'chained deref renders and does not crash' => sub {
     my $expected_chain = '$x->[0]{k}';
     like $x->{evidence}[0]{why}, qr/\Q$expected_chain\E/, 'rendered chain in evidence'
         or diag explain $x;
+    like $x->{evidence}[0]{why}, qr/^dereferenced as array ref /, 'evidence text is English';
 };
 
 done_testing;

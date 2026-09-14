@@ -1,16 +1,17 @@
-//! 変数型推論 v0 — フロー非依存の制約 (facet) 収集。
+//! Variable type inference v0 — flow-insensitive constraint (facet) collection.
 //!
-//! 各 lexical について「どう使われたか」を facet として集める:
-//!   - ARRAYref / HASHref / SCALARref / CODEref: deref された
-//!     (multideref の padsv base、rv2av/rv2hv/rv2sv over padsv、&$x 呼び出し)
-//!   - Object: メソッド呼び出しのインボカント (メソッド名一覧も記録 —
-//!     メソッド名 typo 検出の下地)
-//!   - Num / Str: 数値演算・文字列演算のオペランド
-//! PadnameTYPE (`my Foo $x`) は宣言型としてそのまま載せる。
-//! 相反する deref facet (ARRAYref と HASHref 等) は conflict として報告。
+//! For each lexical, collect "how it was used" as facets:
+//!   - ARRAYref / HASHref / SCALARref / CODEref: it was dereferenced
+//!     (padsv base of a multideref, rv2av/rv2hv/rv2sv over padsv, &$x call)
+//!   - Object: invocant of a method call (the method names are recorded too —
+//!     groundwork for detecting method-name typos)
+//!   - Num / Str: operand of a numeric / string operation
+//! PadnameTYPE (`my Foo $x`) is reported as-is as the declared type.
+//! Contradictory deref facets (ARRAYref and HASHref etc.) are reported as conflicts.
 //!
-//! v0 の制限: フロー非依存 (分岐ごとの型は区別しない)、要素型は追わない、
-//! multiconcat の aux 未デコード (kids に現れる padsv のみ拾う)。
+//! v0 limitations: flow-insensitive (types are not distinguished per branch),
+//! element types are not tracked, multiconcat aux is not decoded (only padsv
+//! appearing among the kids is picked up).
 
 use std::collections::BTreeMap;
 
@@ -87,7 +88,7 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
     let mut acc: BTreeMap<u64, Acc> = BTreeMap::new();
 
     super::walk_with_lines(ir, |node, line| {
-        // multideref: padsv base = その lexical が ref として deref された
+        // multideref: a padsv base means that lexical was dereferenced as a ref
         if let OpDetail::MultiDeref { steps } = &node.detail {
             for step in steps {
                 if step.base == "padsv" {
@@ -104,11 +105,11 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
                             line,
                             facet,
                             format!(
-                                "{} として deref ({})",
+                                "dereferenced as {} ({})",
                                 if step.container == "array" {
-                                    "配列リファレンス"
+                                    "array ref"
                                 } else {
-                                    "ハッシュリファレンス"
+                                    "hash ref"
                                 },
                                 crate::render::render_mderef(ir, steps),
                             ),
@@ -119,7 +120,7 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
         }
 
         match node.name.as_str() {
-            // 非 multideref 形: @$x / %$x / $$x
+            // non-multideref forms: @$x / %$x / $$x
             "rv2av" | "rv2hv" | "rv2sv" => {
                 if let Some(k) = node.kids.first().map(|k| k.skip_null()) {
                     if k.name == "padsv" {
@@ -134,13 +135,13 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
                             node.id,
                             line,
                             facet,
-                            format!("{} による deref", node.name),
+                            format!("dereferenced via {}", node.name),
                         );
                     }
                 }
             }
             "entersub" => {
-                // メソッド呼び出し: インボカントの lexical に Object facet
+                // method call: Object facet on the invocant lexical
                 if let Some((invocant_targ, method)) = method_call_on_pad(node) {
                     add(
                         &mut acc,
@@ -148,14 +149,14 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
                         node.id,
                         line,
                         "Object",
-                        format!("メソッド呼び出し ->{}", method),
+                        format!("method call ->{}", method),
                     );
                     let a = acc.entry(invocant_targ).or_default();
                     if !a.methods.contains(&method) {
                         a.methods.push(method);
                     }
                 }
-                // &$x / $x->(...) : rv2cv (null 化) 越しの padsv
+                // &$x / $x->(...) : padsv through a (nulled) rv2cv
                 if let Some(targ) = coderef_callee_pad(node) {
                     add(
                         &mut acc,
@@ -163,21 +164,21 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
                         node.id,
                         line,
                         "CODEref",
-                        "コードリファレンスとして呼び出し".into(),
+                        "called as a code ref".into(),
                     );
                 }
             }
             name if NUMERIC_OPS.contains(&name) => {
                 for k in node.kids.iter().map(|k| k.skip_null()) {
                     if k.name == "padsv" {
-                        add(&mut acc, k.targ, node.id, line, "Num", format!("数値演算 {}", name));
+                        add(&mut acc, k.targ, node.id, line, "Num", format!("numeric op {}", name));
                     }
                 }
             }
             name if STRING_OPS.contains(&name) => {
                 for k in node.kids.iter().map(|k| k.skip_null()) {
                     if k.name == "padsv" {
-                        add(&mut acc, k.targ, node.id, line, "Str", format!("文字列演算 {}", name));
+                        add(&mut acc, k.targ, node.id, line, "Str", format!("string op {}", name));
                     }
                 }
             }
@@ -185,7 +186,7 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
         }
     });
 
-    // pad テーブルと突き合わせて出力を組み立てる
+    // assemble the output by matching against the pad table
     let mut vars = Vec::new();
     for entry in &ir.pad {
         let Some(name) = entry.name.clone() else {
@@ -193,7 +194,7 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
         };
         let a = acc.remove(&(entry.ix as u64)).unwrap_or_default();
         if a.facets.is_empty() && entry.typ.is_none() {
-            continue; // 情報が無い変数は載せない
+            continue; // omit variables with no information
         }
         let conflicts = deref_conflicts(&a.facets);
         vars.push(VarTypes {
@@ -209,7 +210,7 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
     TypesSpec { vars }
 }
 
-/// deref 系 facet は相互排他 — 複数あれば矛盾
+/// Deref facets are mutually exclusive — more than one is a conflict
 fn deref_conflicts(facets: &[String]) -> Vec<String> {
     let derefs: Vec<&str> = facets
         .iter()
@@ -217,14 +218,14 @@ fn deref_conflicts(facets: &[String]) -> Vec<String> {
         .filter(|f| matches!(*f, "ARRAYref" | "HASHref" | "SCALARref" | "CODEref"))
         .collect();
     if derefs.len() > 1 {
-        vec![format!("{} として同時に使われている", derefs.join(" と "))]
+        vec![format!("used both as {}", derefs.join(" and "))]
     } else {
         Vec::new()
     }
 }
 
-/// entersub がメソッド呼び出しで、インボカントが padsv なら
-/// (targ, メソッド名) を返す
+/// If the entersub is a method call and the invocant is a padsv,
+/// return (targ, method name)
 fn method_call_on_pad(entersub: &OpNode) -> Option<(u64, String)> {
     let mut invocant: Option<u64> = None;
     let mut method: Option<String> = None;
@@ -252,17 +253,17 @@ fn scan_call(
                 *invocant = Some(k.targ);
             }
             _ => {
-                // 最初の値がインボカント。それが padsv 以外なら追わない
+                // the first value is the invocant. If it is not a padsv, do not track it
                 *seen_first = true;
             }
         }
     }
 }
 
-/// entersub の呼び先が null(ex-rv2cv) 越しの padsv (= $cb->(...) / &$cb())
-/// なら targ を返す
+/// If the entersub's callee is a padsv through null(ex-rv2cv) (= $cb->(...) / &$cb()),
+/// return its targ
 fn coderef_callee_pad(entersub: &OpNode) -> Option<u64> {
-    // 呼び先は entersub の最後の kid (メソッド呼び出しでない場合)
+    // the callee is the entersub's last kid (when not a method call)
     let callee = entersub.kids.last()?;
     if callee.op_type == 0 && callee.was.as_deref() == Some("rv2cv") {
         let k = callee.kids.first()?.skip_null();

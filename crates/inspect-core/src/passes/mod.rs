@@ -1,4 +1,4 @@
-//! 解析パス群。すべて SubIr (所有型 IR) 上で動く純 Rust コード。
+//! Analysis passes. All of them are pure Rust operating on SubIr (the owned IR).
 
 pub mod argspec;
 pub mod lints;
@@ -29,8 +29,8 @@ pub fn analyze(ir: &SubIr) -> AnalysisReport {
     }
 }
 
-/// sub 本体の文リスト: leavesub → lineseq の子を COP で区切り、
-/// (行番号, 文の op) の列にする
+/// Statement list of the sub body: split the children of leavesub → lineseq
+/// at COPs into a sequence of (line number, statement op)
 pub(crate) fn statements(ir: &SubIr) -> Vec<(Option<u32>, &OpNode)> {
     let root = ir.root.skip_null();
     let Some(body) = root.kids.first().map(|k| k.skip_null()) else {
@@ -50,7 +50,7 @@ pub(crate) fn statements(ir: &SubIr) -> Vec<(Option<u32>, &OpNode)> {
     out
 }
 
-/// pre-order 走査で COP の行番号を追跡しながら各ノードを訪問する
+/// Visit every node in pre-order while tracking the current COP line number
 pub(crate) fn walk_with_lines<'a>(ir: &'a SubIr, mut f: impl FnMut(&'a OpNode, Option<u32>)) {
     fn rec<'a>(
         node: &'a OpNode,

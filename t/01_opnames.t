@@ -23,7 +23,7 @@ ok +(grep { $_ eq 'multiply' } @$names2), 'named sub contains multiply'
     or diag explain $names2;
 
 # Error cases must croak, not crash.
-# (メッセージは #[xs_sub] の Cv 引数種別トランポリンが出す)
+# (The message is emitted by the #[xs_sub] Cv argument-type trampoline.)
 eval { LibPerlRs::Inspect::op_names_json(42) };
 like $@, qr/must be a CODE reference/, 'croaks on non-ref';
 
