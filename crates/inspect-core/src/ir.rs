@@ -163,6 +163,13 @@ pub enum OpDetail {
     MultiDeref {
         steps: Vec<DerefStep>,
     },
+    /// multiconcat (UNOP_AUX): the nargs+1 constant string segments between
+    /// (and around) the concatenated operands, in order. `None` marks a
+    /// position with no constant segment (aux length -1). `Aux("multiconcat")`
+    /// remains the marker for an undecoded op.
+    MultiConcat {
+        pieces: Vec<Option<String>>,
+    },
     /// Marker for undecoded auxiliary data (UNOP_AUX etc.)
     Aux(String),
 }
@@ -200,10 +207,7 @@ pub enum SvLit {
     Pv(String),
     RefTo(Box<SvLit>),
     Code,
-    Glob {
-        name: String,
-        stash: Option<String>,
-    },
+    Glob { name: String, stash: Option<String> },
     Other(String),
 }
 

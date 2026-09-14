@@ -97,12 +97,7 @@ pub fn analyze_returns(ir: &SubIr) -> RetSpec {
 
 /// Render the non-pushmark children of a return / die (LISTOP)
 pub(crate) fn return_exprs(ir: &SubIr, n: &OpNode) -> Vec<String> {
-    n.kids
-        .iter()
-        .map(|k| k.skip_null())
-        .filter(|k| k.name != "pushmark")
-        .map(|k| render(ir, k))
-        .collect()
+    crate::render::kid_list(ir, n)
 }
 
 /// If the entersub is a croak/confess (Carp) call, return (via, message)
@@ -113,7 +108,7 @@ pub(crate) fn croak_call(ir: &SubIr, n: &OpNode) -> Option<(String, Option<Strin
     fn scan(ir: &SubIr, n: &OpNode, via: &mut Option<String>, args: &mut Vec<String>) {
         for k in n.kids.iter().map(|k| k.skip_null()) {
             match k.name.as_str() {
-                "pushmark" => {}
+                "pushmark" | "padrange" => {}
                 "gv" => {
                     if let OpDetail::Gv { name, .. } = &k.detail {
                         if name == "croak" || name == "confess" {

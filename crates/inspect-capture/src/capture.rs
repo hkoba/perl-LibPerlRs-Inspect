@@ -226,7 +226,8 @@ impl Capturer {
                     // pp_argelem uses the op_aux pointer value itself as the index
                     "argelem" => OpDetail::ArgElem { index: aux as u64 },
                     "multideref" => self.decode_multideref(aux),
-                    // multiconcat etc. are not decoded (keep the op name as a marker)
+                    "multiconcat" => self.decode_multiconcat(aux),
+                    // Other UNOP_AUX ops are not decoded (keep the op name as a marker)
                     other => OpDetail::Aux(other.to_string()),
                 }
             }
@@ -350,6 +351,76 @@ impl Capturer {
             }
         }
         OpDetail::MultiDeref { steps }
+    }
+
+    /// Decode the aux array of multiconcat.
+    ///
+    /// Layout (perl.h "multiconcat" section, S_maybe_multiconcat in op.c,
+    /// pp_multiconcat in pp_hot.c): aux[IX_NARGS] is the operand count,
+    /// aux[IX_PLAIN_PV/LEN] the concatenated constant string in perl's native
+    /// (latin1) encoding or NULL when it is utf8-only, aux[IX_UTF8_PV/LEN]
+    /// the utf8 encoding (always set; it aliases the plain buffer when the
+    /// string is invariant), and from aux[IX_LENGTHS] follow nargs+1
+    /// per-segment lengths (-1 = no constant at that position). When the
+    /// plain and utf8 buffers differ, a second length set for the utf8
+    /// buffer follows the first. The utf8 buffer is decoded here so that the
+    /// pieces are the exact character sequence perl sees regardless of the
+    /// source encoding.
+    fn decode_multiconcat(&self, aux: *mut libperl_sys::UNOP_AUX_item) -> OpDetail {
+        const IX_NARGS: usize = libperl_sys::PERL_MULTICONCAT_IX_NARGS as usize;
+        const IX_PLAIN_PV: usize = libperl_sys::PERL_MULTICONCAT_IX_PLAIN_PV as usize;
+        const IX_PLAIN_LEN: usize = libperl_sys::PERL_MULTICONCAT_IX_PLAIN_LEN as usize;
+        const IX_UTF8_PV: usize = libperl_sys::PERL_MULTICONCAT_IX_UTF8_PV as usize;
+        const IX_UTF8_LEN: usize = libperl_sys::PERL_MULTICONCAT_IX_UTF8_LEN as usize;
+        const IX_LENGTHS: usize = libperl_sys::PERL_MULTICONCAT_IX_LENGTHS as usize;
+        const MAXARG: isize = libperl_sys::PERL_MULTICONCAT_MAXARG as isize;
+
+        let undecoded = || OpDetail::Aux("multiconcat".into());
+        if aux.is_null() {
+            return undecoded();
+        }
+        unsafe {
+            let nargs = (*aux.add(IX_NARGS)).ssize;
+            if !(0..=MAXARG).contains(&nargs) {
+                return undecoded();
+            }
+            let plain = (*aux.add(IX_PLAIN_PV)).pv;
+            let utf8 = (*aux.add(IX_UTF8_PV)).pv;
+            // Defensive: fall back to the plain buffer if utf8 is unset
+            let (pv, len, lens_ix) = if utf8.is_null() {
+                (plain, (*aux.add(IX_PLAIN_LEN)).ssize, IX_LENGTHS)
+            } else if plain.is_null() || plain == utf8 {
+                (utf8, (*aux.add(IX_UTF8_LEN)).ssize, IX_LENGTHS)
+            } else {
+                // Distinct plain/utf8 buffers: the utf8 lengths are the second set
+                (
+                    utf8,
+                    (*aux.add(IX_UTF8_LEN)).ssize,
+                    IX_LENGTHS + nargs as usize + 1,
+                )
+            };
+            if pv.is_null() || len < 0 {
+                return undecoded();
+            }
+            let bytes = std::slice::from_raw_parts(pv as *const u8, len as usize);
+            let mut pieces: Vec<Option<String>> = Vec::with_capacity(nargs as usize + 1);
+            let mut off = 0usize;
+            for i in 0..=(nargs as usize) {
+                let seg = (*aux.add(lens_ix + i)).ssize;
+                if seg < 0 {
+                    pieces.push(None);
+                    continue;
+                }
+                let end = off + seg as usize;
+                if end > bytes.len() {
+                    // Inconsistent lengths: do not read past the constant
+                    return undecoded();
+                }
+                pieces.push(Some(String::from_utf8_lossy(&bytes[off..end]).into_owned()));
+                off = end;
+            }
+            OpDetail::MultiConcat { pieces }
+        }
     }
 
     /// Extract the SV from a UNOP_AUX item. Under ithreads, SV items are

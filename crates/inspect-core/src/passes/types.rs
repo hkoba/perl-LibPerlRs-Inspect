@@ -47,14 +47,48 @@ pub struct Evidence {
 }
 
 const NUMERIC_OPS: &[&str] = &[
-    "add", "subtract", "multiply", "divide", "modulo", "pow", "preinc", "postinc", "predec",
-    "postdec", "negate", "abs", "int", "i_add", "i_subtract", "i_multiply", "i_divide",
-    "i_modulo", "i_negate", "lt", "gt", "le", "ge", "eq", "ne", "ncmp",
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "modulo",
+    "pow",
+    "preinc",
+    "postinc",
+    "predec",
+    "postdec",
+    "negate",
+    "abs",
+    "int",
+    "i_add",
+    "i_subtract",
+    "i_multiply",
+    "i_divide",
+    "i_modulo",
+    "i_negate",
+    "lt",
+    "gt",
+    "le",
+    "ge",
+    "eq",
+    "ne",
+    "ncmp",
 ];
 
 const STRING_OPS: &[&str] = &[
-    "concat", "multiconcat", "slt", "sgt", "sle", "sge", "seq", "sne", "scmp", "lc", "uc",
-    "lcfirst", "ucfirst",
+    "concat",
+    "multiconcat",
+    "slt",
+    "sgt",
+    "sle",
+    "sge",
+    "seq",
+    "sne",
+    "scmp",
+    "lc",
+    "uc",
+    "lcfirst",
+    "ucfirst",
 ];
 
 #[derive(Default)]
@@ -111,7 +145,7 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
                                 } else {
                                     "hash ref"
                                 },
-                                crate::render::render_mderef(ir, steps),
+                                crate::render::render_mderef(ir, steps, None),
                             ),
                         );
                     }
@@ -171,14 +205,28 @@ pub fn analyze_types(ir: &SubIr) -> TypesSpec {
             name if NUMERIC_OPS.contains(&name) => {
                 for k in node.kids.iter().map(|k| k.skip_null()) {
                     if k.name == "padsv" {
-                        add(&mut acc, k.targ, node.id, line, "Num", format!("numeric op {}", name));
+                        add(
+                            &mut acc,
+                            k.targ,
+                            node.id,
+                            line,
+                            "Num",
+                            format!("numeric op {}", name),
+                        );
                     }
                 }
             }
             name if STRING_OPS.contains(&name) => {
                 for k in node.kids.iter().map(|k| k.skip_null()) {
                     if k.name == "padsv" {
-                        add(&mut acc, k.targ, node.id, line, "Str", format!("string op {}", name));
+                        add(
+                            &mut acc,
+                            k.targ,
+                            node.id,
+                            line,
+                            "Str",
+                            format!("string op {}", name),
+                        );
                     }
                 }
             }

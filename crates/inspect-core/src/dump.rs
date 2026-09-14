@@ -105,6 +105,16 @@ fn rec(node: &OpNode, depth: usize, ir: &SubIr, out: &mut String) {
                 ));
             }
         }
+        OpDetail::MultiConcat { pieces } => {
+            let items: Vec<String> = pieces
+                .iter()
+                .map(|p| match p {
+                    Some(s) => format!("{:?}", s),
+                    None => "?".into(),
+                })
+                .collect();
+            out.push_str(&format!(" mconcat=[{}]", items.join(",")));
+        }
         OpDetail::Aux(s) => out.push_str(&format!(" aux={}", s)),
     }
     out.push('\n');

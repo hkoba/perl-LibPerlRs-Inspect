@@ -19,6 +19,9 @@ our @FIXTURES = (
     [deref_chain  => 'sub { my ($x, $i) = @_; $x->[0]{k} + $x->{h}[$i] }'],
     [bool_return  => 'sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }'],
     [compound_guard => 'sub { my ($x, $y) = @_; if ($x && !$y) { "a" } elsif ($x) { "b" } else { "c" } }'],
+    [print_chain  => q{sub { my ($x, $y, $z) = @_; if ($x < 0) { print "x < 0" } elsif ($y < 0) { print "y < 0" } elsif ($z < 0) { print "z < 0" } else { print "x,y,z >= 0" } }}],
+    [interp       => 'sub { my ($x) = @_; "a$x b" }'],
+    [arm_stmts    => 'sub { my ($x) = @_; if ($x) { log_it("a"); note(); return 1 } "z" }'],
 );
 
 sub compile {
