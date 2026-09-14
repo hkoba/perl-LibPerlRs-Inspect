@@ -201,4 +201,45 @@ subtest 'ternary inside a return' => sub {
     is_deeply whens($p[1]), [[0, 0]], 'false arm when';
 };
 
+# stmts: [[line-or-undef, text], ...]
+sub stmts {
+    my ($p) = @_;
+    [map { $_->{text} } @{$p->{stmts}}];
+}
+
+subtest 'statements inside an arm are recorded on its routes' => sub {
+    my $l = logic_of('sub { my ($x) = @_; if ($x) { log_it("a"); note(); return 1 } "z" }');
+    my @p = @{$l->{paths}};
+    is scalar @p, 2, '2 paths';
+    is $p[0]{kind}, 'return', 'return path';
+    is_deeply stmts($p[0]), ['log_it("a")', 'note()'], 'arm statements in order';
+    ok defined $p[0]{stmts}[0]{line}, 'statements carry a line';
+    is_deeply $p[1]{exprs}, ['"z"'], 'fall-through';
+    is_deeply stmts($p[1]), [], 'trace restored after the arm';
+};
+
+subtest 'statements after an early return are recorded' => sub {
+    my $l = logic_of('sub { my ($x) = @_; return unless $x; foo(); "rest" }');
+    my @p = @{$l->{paths}};
+    is $p[0]{kind}, 'return', 'guard';
+    is_deeply stmts($p[0]), [], 'nothing before the guard';
+    is_deeply $p[1]{exprs}, ['"rest"'], 'rest';
+    is_deeply stmts($p[1]), ['foo()'], 'foo() depends on $x';
+};
+
+subtest 'nested arms restore the trace' => sub {
+    my $l = logic_of('sub { my ($x, $y) = @_; if ($x) { a(); if ($y) { b(); return 1 } c(); return "z" } "w" }');
+    my @p = @{$l->{paths}};
+    is scalar @p, 3, '3 paths';
+    is_deeply stmts($p[0]), ['a()', 'b()'], 'inner return sees a(), b()';
+    is_deeply $p[1]{exprs}, ['"z"'], 'z';
+    is_deeply stmts($p[1]), ['a()', 'c()'], 'z sees a(), c() but not b()';
+    is_deeply stmts($p[2]), [], 'w is unconditional-side';
+};
+
+subtest 'common prefix is not recorded' => sub {
+    my $l = logic_of('sub { my ($x) = @_; setup(); if ($x) { "a" } else { "b" } }');
+    is_deeply stmts($_), [], "no stmts for $_->{exprs}[0]" for @{$l->{paths}};
+};
+
 done_testing;

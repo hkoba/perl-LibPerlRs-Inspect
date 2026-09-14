@@ -48,20 +48,50 @@ source: sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }
 
 $a | $b | $c | outcome
 ---+----+----+--------
-F  | F  | F  | return !$c
-F  | F  | T  | return !$c
-F  | T  | F  | return !$c
-F  | T  | T  | return !$c
-T  | F  | F  | return !$c
-T  | F  | T  | return !$c
-T  | T  | F  | return $b
-T  | T  | T  | return $b
+F  | F  | F  | #0 L1 return !$c
+F  | F  | T  | #0 L1 return !$c
+F  | T  | F  | #0 L1 return !$c
+F  | T  | T  | #0 L1 return !$c
+T  | F  | F  | #2 L1 return !$c
+T  | F  | T  | #2 L1 return !$c
+T  | T  | F  | #1 L1 return $b
+T  | T  | T  | #1 L1 return $b
+
+kinds: return = explicit return; die/croak/confess = exception; implicit = last evaluated expression (the sub's implicit return value)
 ```
 
-As in Perl, `&&` and `||` yield the value of the operand that decided
-them, so the outcome column shows `$b`, not a boolean. The same atoms are
+The outcome column reads `#<path index> L<line> <kind> <expr>` (`-` when
+no path matches the row). `implicit` is a path that ends without an
+explicit `return`: the sub's value is the last expression evaluated on
+it. As in Perl, `&&` and `||` yield the value of the operand that decided
+them, so the outcome shows `$b`, not a boolean. The same atoms are
 shared across an `if` / `elsif` chain, so `if ($x && !$y) {...} elsif
 ($x) {...} else {...}` gets a 4-row table with no unreachable rows.
+Statements executed inside a branch arm before the outcome are listed
+under the table as `paths with side effects` (they are also in the
+report as `paths[].stmts`):
+
+```console
+$ perl -Mblib examples/truth_table.pl 'sub { my ($x) = @_; if ($x) { log_it("a"); note(); return 1 } "z" }'
+...
+$x | outcome
+---+--------
+F  | #1 L1 implicit "z"
+T  | #0 L1 return 1
+
+paths with side effects:
+  #0 L1 return 1
+      L1 log_it("a")
+      L1 note()
+```
+
+Expressions are rendered by a small deparser that covers the ops seen in
+practice (calls, `print` / `say` / `printf` with filehandles, string
+interpolation, `grep` / `map`, anonymous hashes and lists, list
+assignment, file tests, ...) and prints anything else as
+`name(args, ...)`. Regex patterns are not captured, so a match renders as
+`$x =~ m/.../`, and two different patterns on the same variable count as
+one atom.
 
 The corresponding report fragment (`analyze($sub)->{logic}`):
 
@@ -69,9 +99,9 @@ The corresponding report fragment (`analyze($sub)->{logic}`):
 {
   conds => ['$a', '$b', '$c'],
   paths => [
-    { kind => 'return', exprs => ['!$c'], when => [{cond => 0, value => 0}] },
-    { kind => 'return', exprs => ['$b'],  when => [{cond => 0, value => 1}, {cond => 1, value => 1}] },
-    { kind => 'return', exprs => ['!$c'], when => [{cond => 0, value => 1}, {cond => 1, value => 0}] },
+    { kind => 'return', line => 1, exprs => ['!$c'], when => [{cond => 0, value => 0}], stmts => [] },
+    { kind => 'return', line => 1, exprs => ['$b'],  when => [{cond => 0, value => 1}, {cond => 1, value => 1}], stmts => [] },
+    { kind => 'return', line => 1, exprs => ['!$c'], when => [{cond => 0, value => 1}, {cond => 1, value => 0}], stmts => [] },
   ],
   table => [ { inputs => [0, 0, 0], path => 0 }, ... ],   # 2**3 rows
 }

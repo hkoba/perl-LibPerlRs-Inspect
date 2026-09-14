@@ -6,11 +6,14 @@
 #
 # The argument is Perl source that evaluates to a code reference; with no
 # argument a built-in sample is used. Columns are the atomic conditions
-# found by the `logic` pass, rows are every truth assignment, and the last
-# column is the outcome reached under that assignment (`return EXPR`,
-# `die MSG`, or an implicit final value). A `-` marks an assignment for
-# which no path condition holds (semantically unreachable under the
-# analysis' approximations, or not covered).
+# found by the `logic` pass, rows are every truth assignment, and the
+# outcome column is `#<path> L<line> <kind> <expr>`: the index of the path
+# reached under that assignment, its source line, and what happens there
+# (`return EXPR`, `die MSG`, or `implicit EXPR` for the last evaluated
+# expression, i.e. the sub's implicit return value). A `-` marks an
+# assignment for which no path condition holds. Paths that execute other
+# statements on the way (branch-arm side effects) are listed below the
+# table.
 use strict;
 use warnings;
 use LibPerlRs::Inspect;
@@ -29,17 +32,20 @@ print "source: $src\n\n";
 
 if (!@conds) {
     print "no conditions found; outcomes:\n";
-    print "  ", outcome($_), "\n" for @paths;
+    print "  ", outcome($_, $paths[$_]), "\n" for 0 .. $#paths;
+    print_stmts();
     exit 0;
 }
 
 if (!defined $logic->{table}) {
     print scalar(@conds), " conditions exceed the truth-table limit; paths:\n";
-    for my $p (@paths) {
+    for my $i (0 .. $#paths) {
+        my $p = $paths[$i];
         my $when = join ' && ',
             map { ($_->{value} ? '' : '!') . $conds[$_->{cond}] } @{$p->{when}};
-        printf "  %-40s when %s\n", outcome($p), ($when eq '' ? '(always)' : $when);
+        printf "  %-44s when %s\n", outcome($i, $p), ($when eq '' ? '(always)' : $when);
     }
+    print_stmts();
     exit 0;
 }
 
@@ -52,15 +58,32 @@ print join('-+-', map { '-' x $_ } @w), "-+--------\n";
 for my $row (@{$logic->{table}}) {
     my @in = @{$row->{inputs}};
     my $cells = join ' | ', map { sprintf "%-*s", $w[$_], ($in[$_] ? 'T' : 'F') } 0 .. $#conds;
-    my $out = defined $row->{path} ? outcome($paths[$row->{path}]) : '-';
+    my $out = defined $row->{path} ? outcome($row->{path}, $paths[$row->{path}]) : '-';
     print "$cells | $out\n";
 }
+print_stmts();
+print "\nkinds: return = explicit return; die/croak/confess = exception; ",
+      "implicit = last evaluated expression (the sub's implicit return value)\n";
 
-# "return EXPR" / "die MSG" / "implicit EXPR" for a path record.
+# "#N L<line> return EXPR" / "#N L<line> die MSG" / "#N L<line> implicit EXPR"
 sub outcome {
-    my ($p) = @_;
+    my ($i, $p) = @_;
     my $exprs = join ', ', @{$p->{exprs}};
-    $p->{kind} eq 'implicit' ? "implicit $exprs"
-        : $exprs eq ''        ? $p->{kind}
-        :                       "$p->{kind} $exprs";
+    my $what = $exprs eq '' ? $p->{kind} : "$p->{kind} $exprs";
+    my $line = defined $p->{line} ? " L$p->{line}" : '';
+    "#$i$line $what";
+}
+
+# Paths that execute further statements before their outcome.
+sub print_stmts {
+    my @with = grep { @{$paths[$_]{stmts}} } 0 .. $#paths;
+    return unless @with;
+    print "\npaths with side effects:\n";
+    for my $i (@with) {
+        print "  ", outcome($i, $paths[$i]), "\n";
+        for my $s (@{$paths[$i]{stmts}}) {
+            my $line = defined $s->{line} ? "L$s->{line} " : '';
+            print "      $line$s->{text}\n";
+        }
+    }
 }

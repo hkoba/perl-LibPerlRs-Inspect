@@ -38,6 +38,14 @@
 //! of the deciding operand, as in Perl: `return $a && $b` reports `$b`
 //! when both are true.
 //!
+//! Each path also lists the statements executed on its route before the
+//! outcome (`stmts`), restricted to statements whose execution depends on
+//! at least one atom: statements before the first branch (common to every
+//! route) and statements after a merge back to the unconditional path set
+//! are omitted. Loops are not recorded as statements (their inner branches
+//! still are), and a non-terminating modifier statement (`$n++ if $x;`)
+//! is recorded only on routes emitted inside its own arm.
+//!
 //! Remaining limitations:
 //! - atoms are compared textually; semantic implication such as
 //!   `$v > 10` => `$v > 5` is not considered, so a truth table may contain
@@ -87,6 +95,17 @@ pub struct PathOutcome {
     pub exprs: Vec<String>,
     /// Conjunction of literals under which this outcome is reached.
     pub when: Vec<CondLit>,
+    /// Statements executed on this route before the outcome whose
+    /// execution depends on at least one atom (source order).
+    #[serde(default)]
+    pub stmts: Vec<StmtRef>,
+}
+
+/// A rendered statement with its source line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StmtRef {
+    pub line: Option<u32>,
+    pub text: String,
 }
 
 /// One literal of a path condition: `conds[cond]` has the value `value`.
@@ -111,6 +130,7 @@ pub fn analyze_logic(ir: &SubIr) -> LogicSpec {
         ir,
         conds: Vec::new(),
         paths: Vec::new(),
+        trace: Vec::new(),
     };
     let stmts = super::statements(ir);
     w.walk_block(&stmts, &vec![vec![]], true);
@@ -208,10 +228,17 @@ fn lits_of(routes: Vec<Route>) -> PathSet {
     routes.into_iter().map(|r| r.lits).collect()
 }
 
+/// The unconditional path set.
+fn is_unconditional(path: &PathSet) -> bool {
+    path.len() == 1 && path[0].is_empty()
+}
+
 struct Walker<'a> {
     ir: &'a SubIr,
     conds: Vec<String>,
     paths: Vec<PathOutcome>,
+    /// Statements recorded on the current route (see `PathOutcome::stmts`).
+    trace: Vec<StmtRef>,
 }
 
 impl<'a> Walker<'a> {
@@ -269,7 +296,7 @@ impl<'a> Walker<'a> {
                     self.emit(line, &via, msg.into_iter().collect(), path);
                     Flow::Terminates
                 } else {
-                    self.tail_implicit(line, node, path, tail);
+                    self.plain_stmt(line, node, path, tail);
                     Flow::Continue
                 }
             }
@@ -295,9 +322,23 @@ impl<'a> Walker<'a> {
                 Flow::Continue
             }
             _ => {
-                self.tail_implicit(line, node, path, tail);
+                self.plain_stmt(line, node, path, tail);
                 Flow::Continue
             }
+        }
+    }
+
+    /// A plain statement: in tail position it is the implicit return
+    /// value; otherwise it is recorded on the route when the route is
+    /// already conditional.
+    fn plain_stmt(&mut self, line: Option<u32>, node: &'a OpNode, path: &PathSet, tail: bool) {
+        if tail {
+            self.emit_value(line, "implicit", node, path);
+        } else if !is_unconditional(path) {
+            self.trace.push(StmtRef {
+                line,
+                text: render(self.ir, node),
+            });
         }
     }
 
@@ -371,6 +412,7 @@ impl<'a> Walker<'a> {
                     kind: "implicit".into(),
                     exprs: vec![v],
                     when: r.lits.clone(),
+                    stmts: self.trace.clone(),
                 });
             }
         }
@@ -394,14 +436,18 @@ impl<'a> Walker<'a> {
         let Some(node) = node else {
             return false;
         };
+        // Statements recorded inside the arm belong to its routes only.
+        let mark = self.trace.len();
         let n = node.skip_null();
-        match n.name.as_str() {
+        let term = match n.name.as_str() {
             "scope" | "leave" | "lineseq" => {
                 let stmts = stmt_list(n, line);
                 self.walk_block(&stmts, path, tail)
             }
             _ => self.walk_block(&[(line, node)], path, tail),
-        }
+        };
+        self.trace.truncate(mark);
+        term
     }
 
     /// leaveloop: the loop control (iterator / continuation condition) is
@@ -424,13 +470,6 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// An expression statement in tail position is an implicit return.
-    fn tail_implicit(&mut self, line: Option<u32>, node: &'a OpNode, path: &PathSet, tail: bool) {
-        if tail {
-            self.emit_value(line, "implicit", node, path);
-        }
-    }
-
     /// Record a value-position expression: decomposed into one outcome per
     /// short-circuit route when possible, otherwise rendered as a whole.
     fn emit_value(&mut self, line: Option<u32>, kind: &str, node: &'a OpNode, path: &PathSet) {
@@ -446,6 +485,7 @@ impl<'a> Walker<'a> {
                     kind: kind.to_string(),
                     exprs: vec![v],
                     when: r.lits,
+                    stmts: self.trace.clone(),
                 });
             }
         }
@@ -459,6 +499,7 @@ impl<'a> Walker<'a> {
                 kind: kind.to_string(),
                 exprs: exprs.clone(),
                 when: conj.clone(),
+                stmts: self.trace.clone(),
             });
         }
     }
@@ -711,6 +752,20 @@ mod tests {
             table.iter().all(|r| r.path.is_some()),
             "no unreachable rows"
         );
+    }
+
+    #[test]
+    fn arm_statements_are_recorded() {
+        // sub { my ($x) = @_; if ($x) { log_it("a"); note(); return 1 } "z" }
+        let l = logic_of(include_str!("../../../../t/golden/arm_stmts.json"));
+        assert_eq!(l.conds, ["$x"]);
+        let p = &l.paths;
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].kind, "return");
+        let texts: Vec<&str> = p[0].stmts.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["Fixtures::log_it(\"a\")", "Fixtures::note()"]);
+        assert_eq!(p[1].exprs, ["\"z\""]);
+        assert!(p[1].stmts.is_empty(), "trace is restored after the arm");
     }
 
     #[test]
