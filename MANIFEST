@@ -28,6 +28,7 @@ crates/inspect-core/src/render.rs
 crates/inspect-xs/Cargo.toml
 crates/inspect-xs/build.rs
 crates/inspect-xs/src/lib.rs
+examples/truth_table.pl
 lib/LibPerlRs/Inspect.pm
 t/00_load.t
 t/01_opnames.t
@@ -39,7 +40,9 @@ t/22_logic.t
 t/40_types.t
 t/41_lints.t
 t/golden/branches.json
+t/golden/bool_return.json
 t/golden/closure.json
+t/golden/compound_guard.json
 t/golden/deref_chain.json
 t/golden/empty.json
 t/golden/eval_die.json

@@ -11,7 +11,8 @@ Reports:
   `$_[n]` — min/max arity, parameter names, defaults)
 - return-value / exception specification (`return` sites, implicit last
   expression, `die` / `Carp::croak`, `wantarray` use)
-- truth tables for statement-level guard conditions
+- truth tables for guard conditions, with `&&` / `||` / `!` / `//` / `?:`
+  decomposed into atomic conditions (see "Truth tables" below)
 - best-effort variable type facets with conflict detection
   (e.g. a hashref later used as an arrayref, with line numbers)
 - lints (e.g. `my $x = EXPR if COND`)
@@ -29,6 +30,60 @@ my $names = LibPerlRs::Inspect::op_names($sub);   # execution-order op names
 The implementation is a Rust cargo workspace (`crates/`) built on
 [libperl-rs](https://github.com/hkoba/libperl-rs); the XS glue is a
 `cdylib` loaded via XSLoader like any other XS module.
+
+## Truth tables
+
+The `logic` section of the report describes every way a sub can finish.
+Branch conditions and the boolean operators reachable from them, from a
+`return` expression, or from the implicit final expression are broken
+down into *atomic conditions* (`conds`), and each outcome is listed with
+the conjunction of atom values that leads to it (`paths[].when`). With at
+most 6 atoms the report also contains a full `table`, one row per truth
+assignment, pointing at the first matching path.
+`examples/truth_table.pl` renders that table:
+
+```console
+$ perl -Mblib examples/truth_table.pl 'sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }'
+source: sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }
+
+$a | $b | $c | outcome
+---+----+----+--------
+F  | F  | F  | return !$c
+F  | F  | T  | return !$c
+F  | T  | F  | return !$c
+F  | T  | T  | return !$c
+T  | F  | F  | return !$c
+T  | F  | T  | return !$c
+T  | T  | F  | return $b
+T  | T  | T  | return $b
+```
+
+As in Perl, `&&` and `||` yield the value of the operand that decided
+them, so the outcome column shows `$b`, not a boolean. The same atoms are
+shared across an `if` / `elsif` chain, so `if ($x && !$y) {...} elsif
+($x) {...} else {...}` gets a 4-row table with no unreachable rows.
+
+The corresponding report fragment (`analyze($sub)->{logic}`):
+
+```perl
+{
+  conds => ['$a', '$b', '$c'],
+  paths => [
+    { kind => 'return', exprs => ['!$c'], when => [{cond => 0, value => 0}] },
+    { kind => 'return', exprs => ['$b'],  when => [{cond => 0, value => 1}, {cond => 1, value => 1}] },
+    { kind => 'return', exprs => ['!$c'], when => [{cond => 0, value => 1}, {cond => 1, value => 0}] },
+  ],
+  table => [ { inputs => [0, 0, 0], path => 0 }, ... ],   # 2**3 rows
+}
+```
+
+Each short-circuit route is its own path, so one `return` site can
+appear several times; count return *sites* with the `returns` section
+instead. Atoms are identified by their rendered text, so no semantic
+implication (`$v > 10` implies `$v > 5`) is applied. Decomposition covers
+guard conditions, single-expression `return`s and the implicit final
+value; assignments, call arguments, `die` messages, loop conditions and
+the `&&=` / `||=` / `//=` family stay opaque.
 
 ## perl-inspect CLI
 

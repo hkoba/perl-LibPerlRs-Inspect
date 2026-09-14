@@ -17,6 +17,8 @@ our @FIXTURES = (
     [method_call  => 'sub { my ($obj) = @_; $obj->frobnicate(1, 2) }'],
     [closure      => 'sub { my $c = 0; sub { $c++ } }'],
     [deref_chain  => 'sub { my ($x, $i) = @_; $x->[0]{k} + $x->{h}[$i] }'],
+    [bool_return  => 'sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }'],
+    [compound_guard => 'sub { my ($x, $y) = @_; if ($x && !$y) { "a" } elsif ($x) { "b" } else { "c" } }'],
 );
 
 sub compile {

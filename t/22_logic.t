@@ -117,4 +117,88 @@ subtest 'die inside eval is guarded but execution continues' => sub {
     is_deeply whens($l->{paths}[1]), [], 'reached regardless (die was caught)';
 };
 
+subtest 'boolean operators in a return expression are decomposed' => sub {
+    my $l = logic_of('sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }');
+    is_deeply $l->{conds}, ['$a', '$b', '$c'], 'one atom per operand';
+    my @p = @{$l->{paths}};
+    is scalar @p, 3, '3 short-circuit routes';
+    is $p[$_]{kind}, 'return', "path $_ kind" for 0 .. 2;
+    is_deeply $p[0]{exprs}, ['!$c'], 'route 0: $a false -> !$c';
+    is_deeply whens($p[0]), [[0, 0]], 'route 0 when';
+    is_deeply $p[1]{exprs}, ['$b'], 'route 1: $a && $b true -> $b';
+    is_deeply whens($p[1]), [[0, 1], [1, 1]], 'route 1 when';
+    is_deeply $p[2]{exprs}, ['!$c'], 'route 2: $a true, $b false -> !$c';
+    is_deeply whens($p[2]), [[0, 1], [1, 0]], 'route 2 when';
+    is scalar @{$l->{table}}, 8, '2^3 rows';
+    is table_path($l, 0, 1, 1), 0, '$a false';
+    is table_path($l, 1, 0, 0), 2, '$a true, $b false';
+    is table_path($l, 1, 1, 0), 1, '$a and $b true';
+};
+
+subtest 'compound guard in if/elsif shares atoms' => sub {
+    my $l = logic_of('sub { my ($x, $y) = @_; if ($x && !$y) { "a" } elsif ($x) { "b" } else { "c" } }');
+    is_deeply $l->{conds}, ['$x', '$y'], 'atoms shared across the chain';
+    my @p = @{$l->{paths}};
+    is scalar @p, 3, '3 paths';
+    is_deeply $p[0]{exprs}, ['"a"'], 'a expr';
+    is_deeply whens($p[0]), [[0, 1], [1, 0]], 'a when';
+    is_deeply $p[1]{exprs}, ['"b"'], 'b expr';
+    is_deeply whens($p[1]), [[0, 1], [1, 1]], 'b when';
+    is_deeply $p[2]{exprs}, ['"c"'], 'c expr';
+    is_deeply whens($p[2]), [[0, 0]], 'c when';
+    is scalar @{$l->{table}}, 4, '2^2 rows';
+    ok((!grep { !defined $_->{path} } @{$l->{table}}), 'no unreachable rows');
+    is table_path($l, 1, 0), 0, 'a';
+    is table_path($l, 1, 1), 1, 'b';
+    is table_path($l, 0, 1), 2, 'c';
+};
+
+subtest 'early return with compound guard fans out the continuation' => sub {
+    my $l = logic_of('sub { my ($x, $y) = @_; return if $x && $y; "rest" }');
+    is_deeply $l->{conds}, ['$x', '$y'], 'conds';
+    my @p = @{$l->{paths}};
+    is scalar @p, 3, '1 return + 2 fall-through routes';
+    is $p[0]{kind}, 'return', 'return path';
+    is_deeply whens($p[0]), [[0, 1], [1, 1]], 'return when both true';
+    is_deeply $p[1]{exprs}, ['"rest"'], 'rest (route 1)';
+    is_deeply whens($p[1]), [[0, 0]], 'rest when $x false';
+    is_deeply $p[2]{exprs}, ['"rest"'], 'rest (route 2)';
+    is_deeply whens($p[2]), [[0, 1], [1, 0]], 'rest when $x true, $y false';
+    is table_path($l, 1, 1), 0, 'table: return';
+    is table_path($l, 0, 1), 1, 'table: rest via $x false';
+    is table_path($l, 1, 0), 2, 'table: rest via $y false';
+};
+
+subtest 'contradictory literals prune unreachable arms' => sub {
+    my $l = logic_of('sub { my ($x) = @_; return unless $x; if ($x) { "a" } else { "b" } }');
+    is_deeply $l->{conds}, ['$x'], 'single atom';
+    my @p = @{$l->{paths}};
+    is scalar @p, 2, 'the else arm is unreachable and not reported';
+    is $p[0]{kind}, 'return', 'early return';
+    is_deeply whens($p[0]), [[0, 0]], 'return when !$x';
+    is_deeply $p[1]{exprs}, ['"a"'], 'a';
+    is_deeply whens($p[1]), [[0, 1]], 'a when $x (no duplicate literal)';
+};
+
+subtest 'negated compound return' => sub {
+    my $l = logic_of('sub { my ($a, $b) = @_; return !($a && $b) }');
+    is_deeply $l->{conds}, ['$a', '$b'], 'conds';
+    my @p = @{$l->{paths}};
+    is scalar @p, 2, '2 routes';
+    is_deeply $p[0]{exprs}, ['!$a'], 'negated lhs';
+    is_deeply whens($p[0]), [[0, 0]], 'when $a false';
+    is_deeply $p[1]{exprs}, ['!$b'], 'negated rhs';
+    is_deeply whens($p[1]), [[0, 1]], 'when $a true';
+};
+
+subtest 'ternary inside a return' => sub {
+    my $l = logic_of('sub { my ($x, $y) = @_; return $x ? $y : 0 }');
+    is_deeply $l->{conds}, ['$x'], 'arm values are not atoms';
+    my @p = @{$l->{paths}};
+    is_deeply $p[0]{exprs}, ['$y'], 'true arm';
+    is_deeply whens($p[0]), [[0, 1]], 'true arm when';
+    is_deeply $p[1]{exprs}, ['0'], 'false arm';
+    is_deeply whens($p[1]), [[0, 0]], 'false arm when';
+};
+
 done_testing;
