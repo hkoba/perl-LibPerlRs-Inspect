@@ -4,6 +4,7 @@ members = [
     "crates/inspect-core",
     "crates/inspect-capture",
     "crates/inspect-xs",
+    "crates/inspect-report",
     "crates/inspect-cli",
 ]
 

@@ -25,6 +25,10 @@ crates/inspect-core/src/passes/mod.rs
 crates/inspect-core/src/passes/retspec.rs
 crates/inspect-core/src/passes/types.rs
 crates/inspect-core/src/render.rs
+crates/inspect-report/Cargo.toml
+crates/inspect-report/build.rs
+crates/inspect-report/src/lib.rs
+crates/inspect-report/tests/api.rs
 crates/inspect-xs/Cargo.toml
 crates/inspect-xs/build.rs
 crates/inspect-xs/src/lib.rs

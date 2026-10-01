@@ -139,6 +139,22 @@ $ ./target/release/perl-inspect -e 'sub add { my ($x, $y) = @_; $x + $y }'
 (Not yet staged by `make install`; for now it is a cargo-built
 artifact.)
 
+The report itself is built by the `crates/inspect-report` library, so
+other Rust programs (e.g. an LSP worker) can link it directly and get the
+same JSON from their own embedded interpreter:
+
+```rust
+let mut perl = libperl_rs::Perl::new();
+inspect_report::prepare(&perl);                 // before parse: BEGIN capture for `uses`
+if perl.parse(&args, &envp) == 0 {              // compile only, never `run`
+    let file = inspect_report::main_file(&perl).unwrap();
+    let json = inspect_report::report(&perl, &file, &Default::default());
+}
+```
+
+`report` is one-shot per interpreter (it loads `B::Deparse`); use a
+throwaway interpreter, e.g. one per forked child.
+
 ## Build requirements
 
 - Perl >= 5.42, built with development headers

@@ -480,8 +480,7 @@ dependencies = [
 name = "inspect-cli"
 version = "0.1.0"
 dependencies = [
- "inspect-capture",
- "inspect-core",
+ "inspect-report",
  "libperl-config",
  "libperl-rs",
  "serde_json",
@@ -492,6 +491,17 @@ name = "inspect-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "inspect-report"
+version = "0.1.0"
+dependencies = [
+ "inspect-capture",
+ "inspect-core",
+ "libperl-config",
+ "libperl-rs",
  "serde_json",
 ]
 
