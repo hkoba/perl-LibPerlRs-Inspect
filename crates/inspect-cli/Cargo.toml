@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 inspect-report = { path = "../inspect-report" }
-libperl-rs = "0.4.4"
+libperl-rs = "0.4.5"
 serde_json = "1"
 
 [build-dependencies]

@@ -576,9 +576,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-macrogen"
-version = "0.1.11"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c94f3151a8697ef9f8fd7dfa2635edb8cee6a72cec1ec382c1134f19fd682c12"
+checksum = "f95d361bc28be73d810b0eeecc1d0404974d33bc9b8f73a011980570065f9339"
 dependencies = [
  "clap",
  "flate2",
@@ -606,9 +606,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-rs"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "230f8f93b9ba915281934c5dae345646791ab162ee3f975db9394119b4877f8c"
+checksum = "3d2b41d7bf4cf7923fce391986b871eabfc0f01be257564acf6403a6fc5aab47"
 dependencies = [
  "libperl-config",
  "libperl-macros",
@@ -617,9 +617,9 @@ dependencies = [
 
 [[package]]
 name = "libperl-sys"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6781122f6e394a3dee6f808ba07eafa318cf3cc71e11be5d9a73108bccf50df2"
+checksum = "c5f80a47cbeaeb9f672f3d9122083d44a26f90426afd96c659d718af809e02ab"
 dependencies = [
  "bindgen",
  "libc",

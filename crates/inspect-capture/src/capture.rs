@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use inspect_core::ir::{DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
 use libperl_rs::{Cop, Cv, Gv, Op, Perl};
 use libperl_sys::{
-    OPclass, OPf_KIDS, Perl_op_class, PerlInterpreter, methop, op, padop, sv, svop, svtype,
+    OPclass, OPf_KIDS, PerlInterpreter, methop, op, padop, sv, svop, svtype,
 };
 
 use crate::raw::*;
@@ -90,14 +90,8 @@ impl Capturer {
         let flags = unsafe { (*o).op_flags };
         let private = unsafe { (*o).op_private };
         let targ = unsafe { (*o).op_targ };
-        // Perl_op_class takes my_perl only in threaded builds
-        #[cfg(perl_useithreads)]
-        let cls = unsafe { Perl_op_class(self.my_perl, o) };
-        #[cfg(not(perl_useithreads))]
-        let cls = {
-            let _ = self.my_perl;
-            unsafe { Perl_op_class(o) }
-        };
+        // thx shim: takes my_perl in both threaded and non-threaded builds
+        let cls = unsafe { libperl_sys::thx::Perl_op_class(self.my_perl, o) };
 
         let mut raw = RawLinks {
             next: unsafe { (*o).op_next as *const op },
