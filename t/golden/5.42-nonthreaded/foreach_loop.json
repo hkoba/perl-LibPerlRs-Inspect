@@ -1,0 +1,352 @@
+{
+   "file" : "(eval)",
+   "lines" : [
+      1,
+      1
+   ],
+   "pad" : [
+      {
+         "flags" : 4,
+         "ix" : 1,
+         "name" : "$sum"
+      }
+   ],
+   "proto" : null,
+   "root" : {
+      "class" : "UNOP",
+      "flags" : 4,
+      "id" : 0,
+      "kids" : [
+         {
+            "class" : "LISTOP",
+            "flags" : 12,
+            "id" : 1,
+            "kids" : [
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 1
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 2,
+                  "name" : "nextstate",
+                  "next" : 4,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "UNOP",
+                  "flags" : 69,
+                  "id" : 3,
+                  "kids" : [
+                     {
+                        "class" : "SVOP",
+                        "detail" : {
+                           "Const" : {
+                              "Iv" : 0
+                           }
+                        },
+                        "flags" : 2,
+                        "id" : 4,
+                        "name" : "const",
+                        "next" : 3,
+                        "op_type" : 5,
+                        "private" : 0,
+                        "targ" : 0
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 178,
+                        "id" : 5,
+                        "name" : "null",
+                        "next" : 3,
+                        "op_type" : 0,
+                        "private" : 128,
+                        "targ" : 9,
+                        "was" : "padsv"
+                     }
+                  ],
+                  "name" : "padsv_store",
+                  "next" : 6,
+                  "op_type" : 10,
+                  "private" : 128,
+                  "targ" : 1
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 1
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 6,
+                  "name" : "nextstate",
+                  "next" : 11,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "BINOP",
+                  "flags" : 5,
+                  "id" : 7,
+                  "kids" : [
+                     {
+                        "class" : "LOOP",
+                        "detail" : {
+                           "Loop" : {
+                              "last" : 7,
+                              "next" : 23,
+                              "redo" : 20
+                           }
+                        },
+                        "flags" : 69,
+                        "id" : 8,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 2,
+                              "id" : 9,
+                              "name" : "null",
+                              "next" : 11,
+                              "op_type" : 0,
+                              "private" : 0,
+                              "targ" : 3,
+                              "was" : "pushmark"
+                           },
+                           {
+                              "class" : "UNOP",
+                              "flags" : 39,
+                              "id" : 10,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 34,
+                                    "id" : 11,
+                                    "name" : "pushmark",
+                                    "next" : 13,
+                                    "op_type" : 3,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "UNOP",
+                                    "flags" : 54,
+                                    "id" : 12,
+                                    "kids" : [
+                                       {
+                                          "class" : "SVOP",
+                                          "detail" : {
+                                             "Gv" : {
+                                                "name" : "_",
+                                                "stash" : "main"
+                                             }
+                                          },
+                                          "flags" : 2,
+                                          "id" : 13,
+                                          "name" : "gv",
+                                          "next" : 12,
+                                          "op_type" : 7,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       }
+                                    ],
+                                    "name" : "rv2av",
+                                    "next" : 14,
+                                    "op_type" : 137,
+                                    "private" : 3,
+                                    "targ" : 3
+                                 }
+                              ],
+                              "name" : "null",
+                              "next" : 14,
+                              "op_type" : 0,
+                              "private" : 0,
+                              "targ" : 161,
+                              "was" : "list"
+                           },
+                           {
+                              "class" : "SVOP",
+                              "detail" : {
+                                 "Gv" : {
+                                    "name" : "_",
+                                    "stash" : "main"
+                                 }
+                              },
+                              "flags" : 2,
+                              "id" : 14,
+                              "name" : "gv",
+                              "next" : 8,
+                              "op_type" : 7,
+                              "private" : 0,
+                              "targ" : 0
+                           }
+                        ],
+                        "name" : "enteriter",
+                        "next" : 17,
+                        "op_type" : 208,
+                        "private" : 8,
+                        "targ" : 0
+                     },
+                     {
+                        "class" : "UNOP",
+                        "flags" : 5,
+                        "id" : 15,
+                        "kids" : [
+                           {
+                              "class" : "LOGOP",
+                              "flags" : 5,
+                              "id" : 16,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 2,
+                                    "id" : 17,
+                                    "name" : "iter",
+                                    "next" : 16,
+                                    "op_type" : 209,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "LISTOP",
+                                    "flags" : 5,
+                                    "id" : 18,
+                                    "kids" : [
+                                       {
+                                          "class" : "BINOP",
+                                          "flags" : 69,
+                                          "id" : 19,
+                                          "kids" : [
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 50,
+                                                "id" : 20,
+                                                "name" : "padsv",
+                                                "next" : 22,
+                                                "op_type" : 9,
+                                                "private" : 0,
+                                                "targ" : 1
+                                             },
+                                             {
+                                                "class" : "UNOP",
+                                                "flags" : 6,
+                                                "id" : 21,
+                                                "kids" : [
+                                                   {
+                                                      "class" : "SVOP",
+                                                      "detail" : {
+                                                         "Gv" : {
+                                                            "name" : "_",
+                                                            "stash" : "main"
+                                                         }
+                                                      },
+                                                      "flags" : 2,
+                                                      "id" : 22,
+                                                      "name" : "gvsv",
+                                                      "next" : 19,
+                                                      "op_type" : 6,
+                                                      "private" : 0,
+                                                      "targ" : 0
+                                                   }
+                                                ],
+                                                "name" : "null",
+                                                "next" : 19,
+                                                "op_type" : 0,
+                                                "private" : 3,
+                                                "targ" : 15,
+                                                "was" : "rv2sv"
+                                             }
+                                          ],
+                                          "name" : "add",
+                                          "next" : 23,
+                                          "op_type" : 63,
+                                          "private" : 2,
+                                          "targ" : 2
+                                       },
+                                       {
+                                          "class" : "OP",
+                                          "flags" : 1,
+                                          "id" : 23,
+                                          "name" : "unstack",
+                                          "next" : 17,
+                                          "op_type" : 204,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       }
+                                    ],
+                                    "name" : "lineseq",
+                                    "next" : 15,
+                                    "op_type" : 201,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 }
+                              ],
+                              "name" : "and",
+                              "next" : 7,
+                              "op_type" : 183,
+                              "other" : 20,
+                              "private" : 1,
+                              "targ" : 0
+                           }
+                        ],
+                        "name" : "null",
+                        "next" : 7,
+                        "op_type" : 0,
+                        "private" : 1,
+                        "targ" : 0
+                     }
+                  ],
+                  "name" : "leaveloop",
+                  "next" : 24,
+                  "op_type" : 211,
+                  "private" : 2,
+                  "targ" : 0
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 1
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 24,
+                  "name" : "nextstate",
+                  "next" : 25,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "OP",
+                  "flags" : 2,
+                  "id" : 25,
+                  "name" : "padsv",
+                  "next" : 0,
+                  "op_type" : 9,
+                  "private" : 0,
+                  "targ" : 1
+               }
+            ],
+            "name" : "lineseq",
+            "next" : 0,
+            "op_type" : 201,
+            "private" : 0,
+            "targ" : 0
+         }
+      ],
+      "name" : "leavesub",
+      "op_type" : 192,
+      "private" : 65,
+      "targ" : 1
+   },
+   "start_id" : 2
+}

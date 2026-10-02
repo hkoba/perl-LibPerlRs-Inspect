@@ -149,6 +149,19 @@ pub enum OpDetail {
     ArgElem {
         index: u64,
     },
+    /// multiparam of a signature (perl 5.44+, replaces argcheck/argelem).
+    /// Pad indexes are 0 for a placeholder without a name (`$`, `@`).
+    /// Defaults live in separate paramtest/paramstore ops (targ = padix).
+    MultiParam {
+        /// number of mandatory positional parameters
+        min_args: u64,
+        /// mandatory + optional positional parameters (excluding slurpy)
+        n_positional: u64,
+        slurpy: Option<char>,
+        param_padix: Vec<u64>,
+        slurpy_padix: u64,
+        named: Vec<NamedParam>,
+    },
     /// Branch-target node ids of the LOOP struct
     Loop {
         redo: Option<u32>,
@@ -172,6 +185,15 @@ pub enum OpDetail {
     },
     /// Marker for undecoded auxiliary data (UNOP_AUX etc.)
     Aux(String),
+}
+
+/// A named signature parameter (`:$name`, perl 5.44+)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedParam {
+    pub padix: u64,
+    /// the key as passed by the caller (without sigil)
+    pub name: String,
+    pub required: bool,
 }
 
 /// One step of a multideref. base corresponds to the MDEREF action names in op.h:

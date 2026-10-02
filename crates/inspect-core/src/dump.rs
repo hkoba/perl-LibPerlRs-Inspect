@@ -79,6 +79,33 @@ fn rec(node: &OpNode, depth: usize, ir: &SubIr, out: &mut String) {
             slurpy.map(String::from).unwrap_or_default()
         )),
         OpDetail::ArgElem { index } => out.push_str(&format!(" argelem={}", index)),
+        OpDetail::MultiParam {
+            min_args,
+            n_positional,
+            slurpy,
+            param_padix,
+            slurpy_padix,
+            named,
+        } => {
+            out.push_str(&format!(
+                " multiparam={},{},{} pad={:?}",
+                min_args,
+                n_positional,
+                slurpy.map(String::from).unwrap_or_default(),
+                param_padix
+            ));
+            if slurpy.is_some() {
+                out.push_str(&format!(" slurpy_pad={}", slurpy_padix));
+            }
+            for n in named {
+                out.push_str(&format!(
+                    " :{}{}@{}",
+                    n.name,
+                    if n.required { "!" } else { "" },
+                    n.padix
+                ));
+            }
+        }
         OpDetail::Loop { redo, next, last } => out.push_str(&format!(
             " loop(redo->{:?} next->{:?} last->{:?})",
             redo, next, last

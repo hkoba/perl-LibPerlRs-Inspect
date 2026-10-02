@@ -29,6 +29,19 @@ subtest 'signature without slurpy' => sub {
     is $a->{max_arity}, 2, 'max';
 };
 
+subtest 'signature with named parameters (perl 5.44+)' => sub {
+    plan skip_all => 'named parameters need perl 5.44' if $] < 5.044;
+    # experimental in 5.44
+    my $a = args_of('use v5.36; no warnings;'
+        . ' sub ($self, :$alpha, :$beta = 2) { $alpha + $beta }');
+    is $a->{style}, 'signature', 'style';
+    is $a->{min_arity}, 3, 'min_arity: $self + one required key/value pair';
+    is $a->{max_arity}, undef, 'max unbounded (named)';
+    is_deeply [map { $_->{key} } @{$a->{params}}], [undef, 'alpha', 'beta'], 'keys';
+    is_deeply [map { $_->{name} } @{$a->{params}}], ['$self', '$alpha', '$beta'], 'names';
+    is $a->{params}[2]{default}, '2', 'named default';
+};
+
 subtest 'unpack: my (...) = @_' => sub {
     my $a = args_of('sub { my ($x, $y) = @_; $x * $y }');
     is $a->{style}, 'unpack', 'style';

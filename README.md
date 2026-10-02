@@ -159,8 +159,11 @@ throwaway interpreter, e.g. one per forked child.
 
 - Perl >= 5.42, built with development headers
   (`dnf install perl-devel` / `apt install libperl-dev`).
-  Verified on a threaded (ithreads) perl; the build adapts to the
-  configuration of the perl that runs `Makefile.PL`.
+  Tested (CI) on perl 5.42 and 5.44, both threaded and non-threaded;
+  the build adapts to the configuration of the perl that runs
+  `Makefile.PL`. The capture golden files are kept per
+  `<major.minor>-<threaded|nonthreaded>` under `t/golden/`; on a perl
+  without a matching set, `t/10_capture_golden.t` is skipped.
 - Rust toolchain with cargo >= 1.85 (edition 2024) — https://rustup.rs/
 - libclang, required by bindgen (`dnf install clang-devel` /
   `apt install libclang-dev`)
