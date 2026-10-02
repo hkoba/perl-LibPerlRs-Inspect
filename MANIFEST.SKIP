@@ -10,6 +10,7 @@
 ^test\.zsh$
 ^\.gitignore$
 ^\.claude/
+^\.github/
 
 # EUMM / dist products (mostly covered by include_default; explicit for clarity)
 ^Makefile$

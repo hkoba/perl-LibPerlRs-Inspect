@@ -716,7 +716,7 @@ mod tests {
     #[test]
     fn bool_return_is_decomposed() {
         // sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }
-        let l = logic_of(include_str!("../../../../t/golden/bool_return.json"));
+        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/bool_return.json"));
         assert_eq!(l.conds, ["$a", "$b", "$c"]);
         let p = &l.paths;
         assert_eq!(p.len(), 3);
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn compound_guard_shares_atoms() {
         // sub { my ($x, $y) = @_; if ($x && !$y) { "a" } elsif ($x) { "b" } else { "c" } }
-        let l = logic_of(include_str!("../../../../t/golden/compound_guard.json"));
+        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/compound_guard.json"));
         assert_eq!(l.conds, ["$x", "$y"]);
         let p = &l.paths;
         assert_eq!(p.len(), 3);
@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn arm_statements_are_recorded() {
         // sub { my ($x) = @_; if ($x) { log_it("a"); note(); return 1 } "z" }
-        let l = logic_of(include_str!("../../../../t/golden/arm_stmts.json"));
+        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/arm_stmts.json"));
         assert_eq!(l.conds, ["$x"]);
         let p = &l.paths;
         assert_eq!(p.len(), 2);

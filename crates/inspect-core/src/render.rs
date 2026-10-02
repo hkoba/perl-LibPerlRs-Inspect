@@ -860,7 +860,7 @@ mod tests {
 
     #[test]
     fn print_chain_renders_as_if_chain() {
-        let ir = ir_of(include_str!("../../../t/golden/print_chain.json"));
+        let ir = ir_of(include_str!("../../../t/golden/5.42-threaded/print_chain.json"));
         assert_eq!(
             render(&ir, last_stmt(&ir)),
             "if ($x < 0) { print \"x < 0\" } elsif ($y < 0) { print \"y < 0\" } \
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn interpolated_string() {
-        let ir = ir_of(include_str!("../../../t/golden/interp.json"));
+        let ir = ir_of(include_str!("../../../t/golden/5.42-threaded/interp.json"));
         assert_eq!(render(&ir, last_stmt(&ir)), "\"a$x b\"");
     }
 

@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 
+#[cfg(perlapi_ver44)]
+use inspect_core::ir::NamedParam;
 use inspect_core::ir::{DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
 use libperl_rs::{Cop, Cv, Gv, Op, Perl};
-use libperl_sys::{
-    OPclass, OPf_KIDS, Perl_op_class, PerlInterpreter, methop, op, padop, sv, svop, svtype,
-};
+use libperl_sys::{OPclass, OPf_KIDS, PerlInterpreter, methop, op, padop, sv, svop, svtype};
 
 use crate::raw::*;
 
@@ -90,7 +90,8 @@ impl Capturer {
         let flags = unsafe { (*o).op_flags };
         let private = unsafe { (*o).op_private };
         let targ = unsafe { (*o).op_targ };
-        let cls = unsafe { Perl_op_class(self.my_perl, o) };
+        // thx shim: takes my_perl in both threaded and non-threaded builds
+        let cls = unsafe { libperl_sys::thx::Perl_op_class(self.my_perl, o) };
 
         let mut raw = RawLinks {
             next: unsafe { (*o).op_next as *const op },
@@ -225,6 +226,9 @@ impl Capturer {
                     }
                     // pp_argelem uses the op_aux pointer value itself as the index
                     "argelem" => OpDetail::ArgElem { index: aux as u64 },
+                    // perl 5.44+: the whole signature in one op
+                    #[cfg(perlapi_ver44)]
+                    "multiparam" => decode_multiparam(aux),
                     "multideref" => self.decode_multideref(aux),
                     "multiconcat" => self.decode_multiconcat(aux),
                     // Other UNOP_AUX ops are not decoded (keep the op name as a marker)
@@ -423,12 +427,19 @@ impl Capturer {
         }
     }
 
-    /// Extract the SV from a UNOP_AUX item. Under ithreads, SV items are
-    /// stored as pad offsets (the UNOP_AUX_item_sv macro in perl.h:
-    /// `PAD_SVl((item)->pad_offset)`). This project assumes a threaded perl
-    /// (on a non-threaded perl this would read (*item).sv directly)
+    /// Extract the SV from a UNOP_AUX item (the UNOP_AUX_item_sv macro in
+    /// perl.h). Under ithreads, SV items are stored as pad offsets
+    /// (`PAD_SVl((item)->pad_offset)`); otherwise the item holds the SV
+    /// pointer itself.
     unsafe fn aux_item_sv(&self, item: *const libperl_sys::UNOP_AUX_item) -> *const sv {
-        PAD_BASE_SV(self.cv.padlist(), unsafe { (*item).pad_offset })
+        #[cfg(perl_useithreads)]
+        {
+            PAD_BASE_SV(self.cv.padlist(), unsafe { (*item).pad_offset })
+        }
+        #[cfg(not(perl_useithreads))]
+        {
+            unsafe { (*item).sv as *const sv }
+        }
     }
 
     /// Look up a variable name by pad index (for displaying multideref padsv indices)
@@ -459,6 +470,50 @@ impl Capturer {
             None
         } else {
             self.ids.get(&(p as usize)).copied()
+        }
+    }
+}
+
+/// Decode the aux struct of multiparam (perl 5.44+, `struct
+/// op_multiparam_aux` in op.h): counts, the pad index of each positional
+/// parameter, the slurpy, and the named parameters. Named parameters are
+/// stored sorted by name hash (seed-dependent), so they are re-sorted by
+/// pad index, i.e. declaration order.
+#[cfg(perlapi_ver44)]
+fn decode_multiparam(aux: *mut libperl_sys::UNOP_AUX_item) -> OpDetail {
+    let a = aux as *const libperl_sys::op_multiparam_aux;
+    if a.is_null() {
+        return OpDetail::Aux("multiparam".into());
+    }
+    unsafe {
+        let n_positional = (*a).n_positional;
+        let param_padix = (0..n_positional)
+            .map(|i| *(*a).param_padix.add(i) as u64)
+            .collect();
+        let mut named: Vec<NamedParam> = (0..(*a).n_named)
+            .map(|i| {
+                let n = (*a).named.add(i);
+                let bytes = std::slice::from_raw_parts((*n).namepv as *const u8, (*n).namelen);
+                NamedParam {
+                    padix: (*n).padix as u64,
+                    name: String::from_utf8_lossy(bytes).into_owned(),
+                    required: (*n).is_required() != 0,
+                }
+            })
+            .collect();
+        named.sort_by_key(|n| n.padix);
+        let slurpy = (*a).slurpy as u8;
+        OpDetail::MultiParam {
+            min_args: (*a).min_args as u64,
+            n_positional: n_positional as u64,
+            slurpy: if slurpy == 0 {
+                None
+            } else {
+                Some(slurpy as char)
+            },
+            param_padix,
+            slurpy_padix: (*a).slurpy_padix as u64,
+            named,
         }
     }
 }
@@ -517,7 +572,10 @@ fn sv_lit(sv: *const sv) -> SvLit {
     }
     unsafe {
         if libperl_sys::SvIOK(sv) != 0 {
-            if libperl_sys::SvIsUV(sv) != 0 {
+            // SvUOK (documented as bool) rather than SvIsUV: SvIsUV has no
+            // apidoc entry, so its generated return type follows its body
+            // (U32 up to 5.42, bool from 5.44). Inside SvIOK they agree.
+            if libperl_sys::SvUOK(sv) {
                 SvLit::Uv(libperl_sys::SvUVX(sv) as u64)
             } else {
                 SvLit::Iv(libperl_sys::SvIVX(sv) as i64)

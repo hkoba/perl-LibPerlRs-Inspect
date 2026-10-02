@@ -1,0 +1,37 @@
+{
+   "file" : "(eval)",
+   "lines" : [
+      1,
+      1
+   ],
+   "pad" : [],
+   "proto" : null,
+   "root" : {
+      "class" : "UNOP",
+      "flags" : 4,
+      "id" : 0,
+      "kids" : [
+         {
+            "class" : "COP",
+            "detail" : {
+               "Cop" : {
+                  "file" : "(eval)",
+                  "line" : 1
+               }
+            },
+            "flags" : 0,
+            "id" : 1,
+            "name" : "nextstate",
+            "next" : 0,
+            "op_type" : 202,
+            "private" : 0,
+            "targ" : 0
+         }
+      ],
+      "name" : "leavesub",
+      "op_type" : 192,
+      "private" : 65,
+      "targ" : 1
+   },
+   "start_id" : 1
+}

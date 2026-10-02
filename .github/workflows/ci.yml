@@ -1,0 +1,83 @@
+name: CI
+
+# Run `perl Makefile.PL && make && make test` plus the cargo workspace tests
+# on a matrix of perl versions x ithreads on/off.
+#
+# Modeled on perl-LibPerlRs-PartialEval's CI. Differences:
+#   - libperl-rs comes from crates.io (no sibling checkout needed)
+#   - MIN_PERL_VERSION is 5.042 (the golden tests assume the 5.42 optree
+#     shape), so only 5.42 and 5 (latest) are tested
+#   - `make test` only runs prove t/ against the XS module; the Rust-side
+#     tests (inspect-core unit tests, inspect-report's API test, the
+#     perl-inspect CLI tests) run via `cargo test --workspace`
+#
+# Which step fails is the diagnostic:
+#   make (cargo build) fails  -> libperl-rs / libperl-sys layer, or the
+#                                capture layer's version/threading cfgs
+#   make test fails           -> optree shape / behaviour differences
+#   cargo test fails          -> analysis passes, inspect-report, CLI
+
+on:
+  push:
+    branches: [ '*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "perl ${{ matrix.perl-version }} ${{ matrix.threaded && 'ithreads' || 'no-ithreads' }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        threaded: [ true, false ]
+        perl-version: [ '5.42', '5' ]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Cache disabled: libperl-sys's bindgen/macrogen output depends on the
+      # perl version and ithreads, so avoid mixing caches across cells
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev libclang-dev clang libnsl-dev libc6-dev build-essential
+
+      # Test deps (Test::More, JSON::PP) are core modules
+      - name: Set up Perl ${{ matrix.perl-version }}
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: ${{ matrix.perl-version }}
+          multi-thread: ${{ matrix.threaded }}
+
+      - name: Configure (Makefile.PL)
+        run: perl Makefile.PL
+
+      - name: Build (cargo release + blib staging)
+        run: make
+
+      - name: Test
+        run: make test
+
+      # Refcount imbalance detection
+      - name: Test with PERL_DESTRUCT_LEVEL=2
+        run: make test
+        env:
+          PERL_DESTRUCT_LEVEL: '2'
+
+      # PERL pins libperl-config to the perl set up above
+      - name: Cargo workspace tests
+        run: PERL="$(command -v perl)" cargo test --workspace --locked

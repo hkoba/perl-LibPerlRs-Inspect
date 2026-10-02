@@ -1,12 +1,15 @@
 //! Argument spec inference. Four-tier pattern detection (in priority order):
-//!   1. signature (argcheck/argelem) — yields the exact arity
+//!   1. signature (argcheck/argelem, or multiparam on perl 5.44+) — yields
+//!      the exact arity
 //!   2. `my (...) = @_` (aassign + rv2av *_)
 //!   3. a run of `my $x = shift` (padsv_store + shift)
 //!   4. direct `$_[n]` access — only a lower bound on arity
 
 use serde::{Deserialize, Serialize};
 
-use crate::ir::{OpDetail, OpNode, SubIr};
+use std::collections::HashMap;
+
+use crate::ir::{NamedParam, OpDetail, OpNode, SubIr};
 use crate::render::render;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,6 +31,11 @@ pub struct Param {
     pub default: Option<String>,
     /// signature | unpack | shift | elem
     pub source: String,
+    /// Key of a named signature parameter (`:$key`, perl 5.44+). Named
+    /// parameters come after the positional ones and carry index =
+    /// the number of positional parameters.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub key: Option<String>,
 }
 
 pub fn analyze_args(ir: &SubIr) -> ArgSpec {
@@ -37,10 +45,14 @@ pub fn analyze_args(ir: &SubIr) -> ArgSpec {
     detect_classic(ir)
 }
 
-/// signature: argcheck / argelem / argdefelem under null(ex-argcheck)
+/// signature: argcheck / argelem / argdefelem under null(ex-argcheck), or
+/// (perl 5.44+) multiparam with paramtest/paramstore for defaults
 fn detect_signature(ir: &SubIr) -> Option<ArgSpec> {
     let mut check: Option<(u64, u64, Option<char>)> = None;
+    let mut multi: Option<&OpDetail> = None;
     let mut params: Vec<Param> = Vec::new();
+    // multiparam defaults: paramtest (targ = padix) -> paramstore -> expr
+    let mut defaults: HashMap<u64, String> = HashMap::new();
 
     super::walk_with_lines(ir, |node, _line| match &node.detail {
         OpDetail::ArgCheck {
@@ -64,10 +76,43 @@ fn detect_signature(ir: &SubIr) -> Option<ArgSpec> {
                 index: *index,
                 default,
                 source: "signature".into(),
+                key: None,
             });
+        }
+        OpDetail::MultiParam { .. } => multi = Some(&node.detail),
+        _ if node.name == "paramtest" => {
+            if let Some(expr) = node
+                .kids
+                .first()
+                .filter(|k| k.name == "paramstore")
+                .and_then(|st| st.kids.first())
+            {
+                defaults.insert(node.targ, render(ir, expr));
+            }
         }
         _ => {}
     });
+
+    if let Some(OpDetail::MultiParam {
+        min_args,
+        n_positional,
+        slurpy,
+        param_padix,
+        slurpy_padix,
+        named,
+    }) = multi
+    {
+        return Some(multiparam_spec(
+            ir,
+            *min_args,
+            *n_positional,
+            *slurpy,
+            param_padix,
+            *slurpy_padix,
+            named,
+            &defaults,
+        ));
+    }
 
     let (p, opt, slurpy) = check?;
     params.sort_by_key(|x| x.index);
@@ -78,6 +123,54 @@ fn detect_signature(ir: &SubIr) -> Option<ArgSpec> {
         invocant_guess: guess_invocant(&params),
         params,
     })
+}
+
+/// ArgSpec of a perl 5.44+ multiparam signature. Like argelem on older
+/// perls, unnamed placeholders (pad index 0) yield no Param. Each required
+/// named parameter adds a key/value pair (2) to the minimum arity; named
+/// parameters lift the upper bound like a slurpy does.
+#[allow(clippy::too_many_arguments)]
+fn multiparam_spec(
+    ir: &SubIr,
+    min_args: u64,
+    n_positional: u64,
+    slurpy: Option<char>,
+    param_padix: &[u64],
+    slurpy_padix: u64,
+    named: &[NamedParam],
+    defaults: &HashMap<u64, String>,
+) -> ArgSpec {
+    let pad_param = |padix: u64, index: u64, key: Option<String>| Param {
+        name: ir.pad_name(padix).map(String::from),
+        index,
+        default: defaults.get(&padix).cloned(),
+        source: "signature".into(),
+        key,
+    };
+    let mut params: Vec<Param> = param_padix
+        .iter()
+        .enumerate()
+        .filter(|(_, padix)| **padix != 0)
+        .map(|(i, padix)| pad_param(*padix, i as u64, None))
+        .collect();
+    if slurpy.is_some() && slurpy_padix != 0 {
+        params.push(pad_param(slurpy_padix, n_positional, None));
+    }
+    for n in named {
+        params.push(pad_param(n.padix, n_positional, Some(n.name.clone())));
+    }
+    let required_named = named.iter().filter(|n| n.required).count() as u64;
+    ArgSpec {
+        style: "signature".into(),
+        min_arity: min_args + 2 * required_named,
+        max_arity: if slurpy.is_some() || !named.is_empty() {
+            None
+        } else {
+            Some(n_positional)
+        },
+        invocant_guess: guess_invocant(&params),
+        params,
+    }
 }
 
 /// Classic patterns: pick up the run of shifts / my(...)=@_ from the start of
@@ -97,6 +190,7 @@ fn detect_classic(ir: &SubIr) -> ArgSpec {
                 index: next_index,
                 default: None,
                 source: "shift".into(),
+                key: None,
             });
             next_index += 1;
             if !styles.contains(&"shift") {
@@ -113,6 +207,7 @@ fn detect_classic(ir: &SubIr) -> ArgSpec {
                     index: next_index,
                     default: None,
                     source: "unpack".into(),
+                    key: None,
                 });
                 if !is_slurpy_param {
                     next_index += 1;
@@ -149,6 +244,7 @@ fn detect_classic(ir: &SubIr) -> ArgSpec {
                         index: ixu,
                         default: None,
                         source: "elem".into(),
+                        key: None,
                     });
                 }
             }

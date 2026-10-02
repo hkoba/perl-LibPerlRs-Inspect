@@ -139,12 +139,31 @@ $ ./target/release/perl-inspect -e 'sub add { my ($x, $y) = @_; $x + $y }'
 (Not yet staged by `make install`; for now it is a cargo-built
 artifact.)
 
+The report itself is built by the `crates/inspect-report` library, so
+other Rust programs (e.g. an LSP worker) can link it directly and get the
+same JSON from their own embedded interpreter:
+
+```rust
+let mut perl = libperl_rs::Perl::new();
+inspect_report::prepare(&perl);                 // before parse: BEGIN capture for `uses`
+if perl.parse(&args, &envp) == 0 {              // compile only, never `run`
+    let file = inspect_report::main_file(&perl).unwrap();
+    let json = inspect_report::report(&perl, &file, &Default::default());
+}
+```
+
+`report` is one-shot per interpreter (it loads `B::Deparse`); use a
+throwaway interpreter, e.g. one per forked child.
+
 ## Build requirements
 
 - Perl >= 5.42, built with development headers
   (`dnf install perl-devel` / `apt install libperl-dev`).
-  Verified on a threaded (ithreads) perl; the build adapts to the
-  configuration of the perl that runs `Makefile.PL`.
+  Tested (CI) on perl 5.42 and 5.44, both threaded and non-threaded;
+  the build adapts to the configuration of the perl that runs
+  `Makefile.PL`. The capture golden files are kept per
+  `<major.minor>-<threaded|nonthreaded>` under `t/golden/`; on a perl
+  without a matching set, `t/10_capture_golden.t` is skipped.
 - Rust toolchain with cargo >= 1.85 (edition 2024) — https://rustup.rs/
 - libclang, required by bindgen (`dnf install clang-devel` /
   `apt install libclang-dev`)
