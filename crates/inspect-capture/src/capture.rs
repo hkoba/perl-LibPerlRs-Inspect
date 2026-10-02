@@ -90,7 +90,14 @@ impl Capturer {
         let flags = unsafe { (*o).op_flags };
         let private = unsafe { (*o).op_private };
         let targ = unsafe { (*o).op_targ };
+        // Perl_op_class takes my_perl only in threaded builds
+        #[cfg(perl_useithreads)]
         let cls = unsafe { Perl_op_class(self.my_perl, o) };
+        #[cfg(not(perl_useithreads))]
+        let cls = {
+            let _ = self.my_perl;
+            unsafe { Perl_op_class(o) }
+        };
 
         let mut raw = RawLinks {
             next: unsafe { (*o).op_next as *const op },
@@ -517,7 +524,10 @@ fn sv_lit(sv: *const sv) -> SvLit {
     }
     unsafe {
         if libperl_sys::SvIOK(sv) != 0 {
-            if libperl_sys::SvIsUV(sv) != 0 {
+            // SvUOK (documented as bool) rather than SvIsUV: SvIsUV has no
+            // apidoc entry, so its generated return type follows its body
+            // (U32 up to 5.42, bool from 5.44). Inside SvIOK they agree.
+            if libperl_sys::SvUOK(sv) {
                 SvLit::Uv(libperl_sys::SvUVX(sv) as u64)
             } else {
                 SvLit::Iv(libperl_sys::SvIVX(sv) as i64)
