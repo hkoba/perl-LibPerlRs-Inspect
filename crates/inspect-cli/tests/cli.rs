@@ -213,5 +213,49 @@ fn sub_lexicals() {
     assert!(outer.get("line").is_none());
 
     // sigil-only internal slots are not listed
-    assert!(lex.iter().all(|e| e["name"].as_str().is_some_and(|n| n.len() > 1)));
+    assert!(
+        lex.iter()
+            .all(|e| e["name"].as_str().is_some_and(|n| n.len() > 1))
+    );
+}
+
+#[test]
+fn analyze_prefix() {
+    // a throwaway "workspace" with one module under lib/
+    let ws = std::env::temp_dir().join(format!("perl-inspect-prefix-{}", std::process::id()));
+    let lib = ws.join("lib").join("My");
+    std::fs::create_dir_all(&lib).expect("mkdir");
+    std::fs::write(
+        lib.join("Util.pm"),
+        "package My::Util;\nsub add {\n    my ($x, $y) = @_;\n    return $x + $y;\n}\n1;\n",
+    )
+    .expect("write module");
+    let inc = format!("-I{}", ws.join("lib").display());
+    let prefix = format!("--analyze-prefix={}", ws.join("lib").display());
+    let script = "use My::Util; sub here { 1 }";
+
+    // default: subs of other files are not analyzed
+    let v = run(&[&inc, "-e", script]);
+    let add = &v["packages"]["My::Util"]["subs"]["add"];
+    assert_eq!(add["provenance"], "imported");
+    assert!(add.get("args").is_none());
+    assert!(add.get("lexicals").is_none());
+
+    // with the prefix: analyzed like a file sub, provenance unchanged
+    let v = run(&[&prefix, &inc, "-e", script]);
+    let _ = std::fs::remove_dir_all(&ws);
+    let add = &v["packages"]["My::Util"]["subs"]["add"];
+    assert_eq!(add["provenance"], "imported");
+    assert_eq!(add["lines"], serde_json::json!([3, 4]));
+    assert_eq!(add["args"]["max_arity"], 2);
+    assert_eq!(add["lexicals"][0]["name"], "$x");
+    // subs outside the prefix (core modules) stay unanalyzed
+    let others_analyzed = v["packages"]
+        .as_object()
+        .expect("packages")
+        .iter()
+        .filter(|(pkg, _)| *pkg != "My::Util")
+        .flat_map(|(_, p)| p["subs"].as_object().expect("subs").values())
+        .any(|s| s["provenance"] == "imported" && s.get("args").is_some());
+    assert!(!others_analyzed);
 }

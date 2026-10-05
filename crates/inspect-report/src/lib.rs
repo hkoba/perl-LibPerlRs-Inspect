@@ -7,7 +7,9 @@
 //!   - stash walk + **provenance tags** (file / imported / xs)
 //!   - file / line range / prototype per CV
 //!   - argspec of file-defined subs (or, with [`ReportOpts::deep`], the
-//!     full analysis report: args / returns / logic / types / lints)
+//!     full analysis report: args / returns / logic / types / lints); with
+//!     [`ReportOpts::analyze_prefixes`] also of subs from other files under
+//!     the given path prefixes (e.g. the workspace's `lib/`)
 //!   - the target file's own `use` statements (`uses`) and opaque `BEGIN`
 //!     blocks (`opaque_begins`)
 //!   - `lexicals` of each analyzed sub: name, `pad_ix`, `decl`
@@ -80,6 +82,13 @@ pub struct ReportOpts {
     /// Embed the full analysis report (args / returns / logic / types /
     /// lints) in each file-defined sub instead of argspec alone.
     pub deep: bool,
+    /// Also analyze (lines / args or report / lexicals) the subs defined
+    /// in other files whose path (CvFILE) starts with one of these
+    /// prefixes — e.g. the workspace's `lib/`. Plain string prefix match:
+    /// pass them in the form perl loads the files, i.e. matching the `-I`
+    /// paths. Such subs keep their `imported` provenance. Empty (the
+    /// default) analyzes only the compiled file's own subs.
+    pub analyze_prefixes: Vec<String>,
 }
 
 /// Prepare a fresh interpreter for [`report`]. Must be called **before**
@@ -111,7 +120,7 @@ pub fn report(perl: &Perl, main_file: &str, opts: &ReportOpts) -> Value {
     let mut pkgs: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
     let mut walker = StashWalker::new(perl);
     walker.walk("main", &mut |e| {
-        let entry = sub_entry(perl, e, main_file, opts.deep);
+        let entry = sub_entry(perl, e, main_file, opts);
         pkgs.entry(e.package.clone())
             .or_default()
             .insert(e.name.clone(), entry);
@@ -187,8 +196,10 @@ pub fn report(perl: &Perl, main_file: &str, opts: &ReportOpts) -> Value {
 ///
 /// Provenance tag: XSUB → "xs", CvFILE equal to the target file → "file",
 /// anything else (imported from another module / defined in another file)
-/// → "imported".
-fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
+/// → "imported". "file" subs, and "imported" ones under
+/// `opts.analyze_prefixes`, are analyzed (lines / args or report /
+/// lexicals).
+fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> Value {
     let cv = e.cv;
     let file = cv.file();
     let provenance = if cv.is_xsub() {
@@ -215,14 +226,21 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
         }
     }
 
-    if provenance == "file" {
+    let analyze = provenance == "file"
+        || (provenance == "imported"
+            && file.as_deref().is_some_and(|f| {
+                opts.analyze_prefixes
+                    .iter()
+                    .any(|p| !p.is_empty() && f.starts_with(p.as_str()))
+            }));
+    if analyze {
         match inspect_capture::capture_sub(perl, cv) {
             Ok(ir) => {
                 if let Some((lo, hi)) = ir.lines {
                     m.insert("lines".into(), json!([lo, hi]));
                 }
                 m.insert("lexicals".into(), lexicals(&ir));
-                if deep {
+                if opts.deep {
                     let report = inspect_core::passes::analyze(&ir);
                     m.insert(
                         "report".into(),
