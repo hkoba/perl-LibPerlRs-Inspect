@@ -10,6 +10,20 @@
 //!     full analysis report: args / returns / logic / types / lints)
 //!   - the target file's own `use` statements (`uses`) and opaque `BEGIN`
 //!     blocks (`opaque_begins`)
+//!   - per-package inheritance for packages with a non-empty `@ISA`:
+//!     `isa` (declaration order), `linear_isa` (MRO order, the package
+//!     itself first) and `mro` (`dfs` / `c3`). Such a package is listed
+//!     even when it has no subs (`"subs": {}`). `@ISA` is read as it
+//!     stands after compilation: assignments in modules loaded via
+//!     `use`/`require` (which execute) and in BEGIN (`use parent`) are
+//!     seen, but a top-level runtime assignment in the compiled file
+//!     itself (`our @ISA = (...)`) is not, since its main body never runs.
+//!
+//! # Schema compatibility
+//!
+//! The JSON stays at `schema_version` 1 while it only grows: new keys are
+//! optional and existing ones keep their meaning. Detect newer features
+//! by the presence of their keys.
 //!
 //! # Calling sequence
 //!
@@ -42,6 +56,8 @@
 //! interpreter (e.g. one per forked child) for each report.
 
 use std::collections::BTreeMap;
+
+mod packages;
 
 use libperl_rs::{Perl, StashWalker, SubEntry};
 use serde_json::{Map, Value, json};
@@ -96,9 +112,30 @@ pub fn report(perl: &Perl, main_file: &str, opts: &ReportOpts) -> Value {
             .insert(e.name.clone(), entry);
     });
 
+    // Inheritance (U5). Done before file_begins as well: B::Deparse would
+    // add its own packages. A package with @ISA but no subs still gets an
+    // entry (with empty "subs").
+    let mut inheritance: BTreeMap<String, packages::Inheritance> = BTreeMap::new();
+    for pkg in packages::package_names(perl) {
+        if let Some(inh) = packages::inheritance(perl, &pkg) {
+            inheritance.insert(pkg, inh);
+        }
+    }
+    for pkg in inheritance.keys() {
+        pkgs.entry(pkg.clone()).or_default();
+    }
+
     let packages: BTreeMap<String, Value> = pkgs
         .into_iter()
-        .map(|(pkg, subs)| (pkg, json!({ "subs": subs })))
+        .map(|(pkg, subs)| {
+            let mut entry = json!({ "subs": subs });
+            if let Some(inh) = inheritance.remove(&pkg) {
+                entry["isa"] = json!(inh.isa);
+                entry["linear_isa"] = json!(inh.linear_isa);
+                entry["mro"] = json!(inh.mro);
+            }
+            (pkg, entry)
+        })
         .collect();
 
     // use extraction is done **after** the stash walk: requiring B::Deparse

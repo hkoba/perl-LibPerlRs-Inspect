@@ -120,3 +120,41 @@ fn deep_report() {
     assert!(add["report"].get("returns").is_some());
     assert!(add["report"].get("logic").is_some());
 }
+
+const ISA_SCRIPT: &str = "\
+package Base; sub new { bless {}, shift }
+package Mid; use parent -norequire, 'Base';
+package Other; sub other {}
+package Child; use mro 'c3'; use parent -norequire, 'Mid', 'Other';
+package Runtime; our @ISA = ('Base');
+";
+
+#[test]
+fn package_inheritance() {
+    let v = run(&["-e", ISA_SCRIPT]);
+    let pkgs = &v["packages"];
+
+    // a package with @ISA but no subs is still listed (empty subs)
+    let mid = &pkgs["Mid"];
+    assert_eq!(mid["subs"], serde_json::json!({}));
+    assert_eq!(mid["isa"], serde_json::json!(["Base"]));
+    assert_eq!(mid["linear_isa"], serde_json::json!(["Mid", "Base"]));
+    assert_eq!(mid["mro"], "dfs");
+
+    // declaration order for isa, C3 order (self first) for linear_isa
+    let child = &pkgs["Child"];
+    assert_eq!(child["isa"], serde_json::json!(["Mid", "Other"]));
+    assert_eq!(
+        child["linear_isa"],
+        serde_json::json!(["Child", "Mid", "Base", "Other"])
+    );
+    assert_eq!(child["mro"], "c3");
+
+    // no @ISA -> no inheritance fields
+    assert!(pkgs["Base"].get("isa").is_none());
+    assert!(pkgs["Base"].get("linear_isa").is_none());
+
+    // a top-level `our @ISA = (...)` of the compiled file is a runtime
+    // assignment and is not seen (the main body never runs)
+    assert!(pkgs.get("Runtime").is_none());
+}

@@ -128,7 +128,10 @@ types / lints). The report also reconstructs the file's own `use`
 statements **with their import arguments** (`uses`, via BEGIN capture +
 `B::Deparse::begin_is_use` — the technique shared with
 `LibPerlRs::PartialEval`'s `compile_info`), plus the line numbers of
-opaque `BEGIN` blocks (`opaque_begins`).
+opaque `BEGIN` blocks (`opaque_begins`). Packages with a non-empty
+`@ISA` carry `isa`, `linear_isa` (MRO order) and `mro`, and are listed
+even when they define no subs; a top-level runtime `our @ISA = (...)` in
+the compiled file itself is not seen, since its main body never runs.
 
 ```console
 $ cargo build -p inspect-cli --release
