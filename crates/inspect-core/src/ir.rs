@@ -9,6 +9,8 @@
 //! - Pad names/types are not embedded in each node but centralized in
 //!   `SubIr::pad` (looked up by targ).
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,8 +36,27 @@ pub struct PadEntry {
     /// Stash name of PadnameTYPE (the Foo in `my Foo $x`)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub typ: Option<String>,
-    /// Raw value of xpadn_flags
+    /// Raw value of xpadn_flags (see [`padname_flags`])
     pub flags: u8,
+    /// For an `our` declaration, the package it belongs to
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub our_stash: Option<String>,
+    /// Line of the declaring statement (None for captured outer names or
+    /// when undeterminable)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line: Option<u32>,
+    /// First and last line of the statements that can see the name
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub scope: Option<(u32, u32)>,
+}
+
+/// Bits of [`PadEntry::flags`] (PADNAMEf_* in pad.h)
+pub mod padname_flags {
+    /// captured from an enclosing sub (closure)
+    pub const OUTER: u8 = 0x01;
+    pub const STATE: u8 = 0x02;
+    /// `field` of a `class` (perl 5.38+)
+    pub const FIELD: u8 = 0x20;
 }
 
 /// Result of Perl_op_class. The serde names match the return values of
@@ -252,6 +273,55 @@ impl SubIr {
             .iter()
             .find(|e| e.ix as u64 == targ)
             .and_then(|e| e.name.as_deref())
+    }
+
+    /// Line of the statement that introduces each pad entry, keyed by pad
+    /// index: the first op (pre-order) that declares it — a pad op with
+    /// OPpLVAL_INTRO (`my $x`, `my ($a, $b) = @_` via padrange, `for my
+    /// $i`), or a signature parameter (argelem / multiparam). `our`
+    /// declarations have no such pad op and are not covered.
+    pub fn intro_lines(&self) -> HashMap<u64, u32> {
+        const OPP_LVAL_INTRO: u8 = 0x80;
+        const OPP_PADRANGE_COUNTMASK: u8 = 0x7f;
+        let mut out: HashMap<u64, u32> = HashMap::new();
+        crate::passes::walk_with_lines(self, |node, line| {
+            let Some(line) = line else { return };
+            let mut intro = |ix: u64| {
+                out.entry(ix).or_insert(line);
+            };
+            // live ops only: op_null() reuses op_targ for the original op
+            // type, so a nulled op's targ is not a pad index
+            let name = node.name.as_str();
+            let lval_intro = node.private & OPP_LVAL_INTRO != 0;
+            match (name, &node.detail) {
+                ("padsv" | "padav" | "padhv" | "padsv_store" | "enteriter", _) if lval_intro => {
+                    intro(node.targ)
+                }
+                ("padrange", _) if lval_intro => {
+                    let n = (node.private & OPP_PADRANGE_COUNTMASK) as u64;
+                    (node.targ..node.targ + n).for_each(&mut intro);
+                }
+                ("argelem", _) => intro(node.targ),
+                (
+                    _,
+                    OpDetail::MultiParam {
+                        param_padix,
+                        slurpy_padix,
+                        named,
+                        ..
+                    },
+                ) => {
+                    param_padix
+                        .iter()
+                        .chain(std::iter::once(slurpy_padix))
+                        .chain(named.iter().map(|n| &n.padix))
+                        .filter(|ix| **ix != 0)
+                        .for_each(|ix| intro(*ix));
+                }
+                _ => {}
+            }
+        });
+        out
     }
 }
 

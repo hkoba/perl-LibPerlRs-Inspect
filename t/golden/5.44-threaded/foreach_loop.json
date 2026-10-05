@@ -8,7 +8,12 @@
       {
          "flags" : 4,
          "ix" : 1,
-         "name" : "$sum"
+         "line" : 1,
+         "name" : "$sum",
+         "scope" : [
+            1,
+            1
+         ]
       }
    ],
    "proto" : null,

@@ -132,6 +132,8 @@ opaque `BEGIN` blocks (`opaque_begins`). Packages with a non-empty
 `@ISA` carry `isa`, `linear_isa` (MRO order) and `mro`, and are listed
 even when they define no subs; a top-level runtime `our @ISA = (...)` in
 the compiled file itself is not seen, since its main body never runs.
+Each analyzed sub also lists its `lexicals` (name, declarator, `my Foo
+$x` type, declaring line and visible line range).
 
 ```console
 $ cargo build -p inspect-cli --release

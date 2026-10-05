@@ -158,3 +158,60 @@ fn package_inheritance() {
     // assignment and is not seen (the main body never runs)
     assert!(pkgs.get("Runtime").is_none());
 }
+
+const LEXICALS_SCRIPT: &str = "\
+use v5.36;
+package Foo; sub new { bless {}, shift }
+package Bar;
+my $outer = 1;
+sub run ($self, $n = 2) {
+    my Foo $obj = Foo->new;
+    our $pkgvar;
+    state $count = 0;
+    for my $i (1..$n) {
+        $count += $i + $outer;
+    }
+    return $obj;
+}
+";
+
+#[test]
+fn sub_lexicals() {
+    let v = run(&["-e", LEXICALS_SCRIPT]);
+    let lex = v["packages"]["Bar"]["subs"]["run"]["lexicals"]
+        .as_array()
+        .expect("lexicals array");
+    let by_name = |name: &str| {
+        lex.iter()
+            .find(|e| e["name"] == name)
+            .unwrap_or_else(|| panic!("{name} not in {lex:?}"))
+    };
+
+    // signature parameters: declared on the sub line, visible to the body
+    assert_eq!(by_name("$self")["decl"], "my");
+    assert_eq!(by_name("$self")["line"], 5);
+    assert_eq!(by_name("$n")["scope"], serde_json::json!([5, 12]));
+
+    // `my Foo $obj`: declared type; visible from the next statement on
+    let obj = by_name("$obj");
+    assert_eq!(obj["type"], "Foo");
+    assert_eq!(obj["line"], 6);
+    assert_eq!(obj["scope"], serde_json::json!([7, 12]));
+
+    assert_eq!(by_name("$pkgvar")["decl"], "our");
+    assert_eq!(by_name("$pkgvar")["package"], "Bar");
+    assert_eq!(by_name("$count")["decl"], "state");
+
+    // loop variable: scoped to the loop body
+    let i = by_name("$i");
+    assert_eq!(i["line"], 9);
+    assert_eq!(i["scope"], serde_json::json!([10, 10]));
+
+    // closure capture: marked outer, no lines
+    let outer = by_name("$outer");
+    assert_eq!(outer["outer"], true);
+    assert!(outer.get("line").is_none());
+
+    // sigil-only internal slots are not listed
+    assert!(lex.iter().all(|e| e["name"].as_str().is_some_and(|n| n.len() > 1)));
+}

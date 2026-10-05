@@ -10,6 +10,11 @@
 //!     full analysis report: args / returns / logic / types / lints)
 //!   - the target file's own `use` statements (`uses`) and opaque `BEGIN`
 //!     blocks (`opaque_begins`)
+//!   - `lexicals` of each analyzed sub: name, `pad_ix`, `decl`
+//!     (my / state / our / field), declared `type` (`my Foo $x`), the
+//!     `package` of an `our`, the declaring `line` and the `scope` line
+//!     range of the statements that can see it (from the pad name's COP
+//!     sequence range); closure captures are `outer` without lines
 //!   - per-package inheritance for packages with a non-empty `@ISA`:
 //!     `isa` (declaration order), `linear_isa` (MRO order, the package
 //!     itself first) and `mro` (`dfs` / `c3`). Such a package is listed
@@ -216,6 +221,7 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
                 if let Some((lo, hi)) = ir.lines {
                     m.insert("lines".into(), json!([lo, hi]));
                 }
+                m.insert("lexicals".into(), lexicals(&ir));
                 if deep {
                     let report = inspect_core::passes::analyze(&ir);
                     m.insert(
@@ -236,4 +242,51 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
         }
     }
     Value::Object(m)
+}
+
+/// The named pad entries of a sub (U2): name, pad index, declarator,
+/// declared type (`my Foo $x`), declaring line and the line range of the
+/// statements that can see it. Variables captured from an enclosing sub
+/// are marked `outer` and carry no lines. Sigil-only names (`$`) are
+/// internal slots (state-var once flags, loop iterators, signature
+/// placeholders) and are left out.
+fn lexicals(ir: &inspect_core::ir::SubIr) -> Value {
+    use inspect_core::ir::padname_flags;
+    let entries: Vec<Value> = ir
+        .pad
+        .iter()
+        .filter(|p| p.name.as_deref().is_some_and(|n| n.len() > 1))
+        .map(|p| {
+            let decl = if p.our_stash.is_some() {
+                "our"
+            } else if p.flags & padname_flags::FIELD != 0 {
+                "field"
+            } else if p.flags & padname_flags::STATE != 0 {
+                "state"
+            } else {
+                "my"
+            };
+            let mut e = Map::new();
+            e.insert("name".into(), json!(p.name));
+            e.insert("pad_ix".into(), json!(p.ix));
+            e.insert("decl".into(), json!(decl));
+            if let Some(t) = &p.typ {
+                e.insert("type".into(), json!(t));
+            }
+            if let Some(pkg) = &p.our_stash {
+                e.insert("package".into(), json!(pkg));
+            }
+            if p.flags & padname_flags::OUTER != 0 {
+                e.insert("outer".into(), json!(true));
+            }
+            if let Some(l) = p.line {
+                e.insert("line".into(), json!(l));
+            }
+            if let Some((lo, hi)) = p.scope {
+                e.insert("scope".into(), json!([lo, hi]));
+            }
+            Value::Object(e)
+        })
+        .collect();
+    Value::Array(entries)
 }
