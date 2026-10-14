@@ -141,6 +141,7 @@ Arrayref of the recorded requires, in the order they ran:
         stack     => ['My/App.pm'],     # files being loaded, outermost first
         path      => 'lib/My/Util.pm',  # load only: the file to be read
         reload_of => 'bin/app.pl',      # load only, see below
+        snapshot  => { ... },           # in_progress / reload, see below
     }
 
 C<status> is C<load> (not yet loaded: loading starts), C<cached> (already
@@ -156,6 +157,19 @@ module compiled as the main program is not in C<%INC> under its module
 name, so a dependency cycle leading back to it compiles it a second
 time), or to the other C<%INC> key it was loaded under. Files are
 compared by canonical path.
+
+For C<in_progress> and reloads, C<snapshot> records what the target
+package (named after the C<*.pm> file) provided at that moment, which is
+what the requiring side gets to see:
+
+    {
+        package   => 'My::Util',
+        subs      => ['import'],          # defined so far, imported ones too
+        import    => 'Exporter::import',  # what ->import resolves to, or undef
+        isa       => [],
+        export    => [],                  # @EXPORT
+        export_ok => [],                  # @EXPORT_OK
+    }
 
 =item packages()
 

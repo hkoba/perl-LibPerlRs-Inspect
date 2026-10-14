@@ -162,7 +162,7 @@ fn require_trace_stop() {
 
 /// `LibPerlRs::Inspect::require_events()` — arrayref of the recorded
 /// requires: `{ name, module, from_file, from_line, status, stack, path,
-/// reload_of }`.
+/// reload_of, snapshot }`.
 #[xs_sub]
 fn require_events(my_perl: &Perl) -> Rv<Av> {
     let av = Av::new(my_perl);
@@ -181,6 +181,19 @@ fn require_events(my_perl: &Perl) -> Rv<Av> {
         }
         if let Some(r) = ev.reload_of {
             m.insert("reload_of".into(), json!(r));
+        }
+        if let Some(snap) = ev.snapshot {
+            m.insert(
+                "snapshot".into(),
+                json!({
+                    "package": snap.package,
+                    "subs": snap.subs,
+                    "import": snap.import,
+                    "isa": snap.isa,
+                    "export": snap.export,
+                    "export_ok": snap.export_ok,
+                }),
+            );
         }
         av.push(my_perl, build_hv(my_perl, &m).into_rv(my_perl).as_sv());
     }

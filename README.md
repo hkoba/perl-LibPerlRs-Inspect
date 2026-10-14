@@ -172,6 +172,21 @@ reload: Cyc::Main (t/lib-deps/Cyc/Main.pm) is compiled a second time; it was com
 ...
 ```
 
+For both, it shows what the target package provided at that moment,
+what it set up only later, and what a `use` asked for that it could not
+provide yet. For example, a `use` without arguments that ran before the
+target filled `@EXPORT` compiles fine but imports nothing:
+
+```console
+$ perl -Mblib examples/module_cycles.pl -- -It/lib-deps -e 'use Imp::Quiet'
+still compiling: Imp::Listener requires Imp::Quiet (use at t/lib-deps/Imp/Listener.pm line 3)
+  ...
+  Imp::Quiet was compiled up to t/lib-deps/Imp/Quiet.pm line 6 at that point
+  Imp::Quiet provided then: import Exporter::import; subs: import
+  set up only later: @EXPORT (shout); subs: shout
+  !! `use Imp::Quiet` imported nothing: @EXPORT was still empty (later: shout)
+```
+
 `examples/module_graph.pl` prints the graph in Graphviz DOT format.
 Both take `--prefix=DIR` to keep only the modules under a directory and
 `--static` to include the `require`s inside subs.

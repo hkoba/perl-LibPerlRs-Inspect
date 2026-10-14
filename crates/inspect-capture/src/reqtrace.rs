@@ -28,7 +28,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use libperl_rs::{Av, Cop, Hv, Perl, Sv, SvKind};
+use libperl_rs::{Av, Cop, Cv, Gv, Hv, Perl, Sv, SvKind};
 use libperl_sys as sys;
 use libperl_sys::{OP, PerlInterpreter, thx};
 
@@ -55,6 +55,25 @@ pub struct RequireEvent {
     /// main program (`$0`) or under this other `%INC` key — loading it
     /// again compiles the same code twice
     pub reload_of: Option<String>,
+    /// For `in_progress` and reloads: what the target package provided at
+    /// that moment (what the requiring side gets to see)
+    pub snapshot: Option<PackageSnapshot>,
+}
+
+/// State of a package at one moment of its compilation.
+#[derive(Debug, Clone)]
+pub struct PackageSnapshot {
+    pub package: String,
+    /// Names of the subs defined so far, imported ones included
+    /// (declared-only subs and method cache entries excluded)
+    pub subs: Vec<String>,
+    /// The `import` method resolution finds, by its qualified name
+    /// (`Exporter::import`, `Foo::import`, `UNIVERSAL::import`, ...);
+    /// None when there is none
+    pub import: Option<String>,
+    pub isa: Vec<String>,
+    pub export: Vec<String>,
+    pub export_ok: Vec<String>,
 }
 
 thread_local! {
@@ -189,9 +208,15 @@ unsafe fn record(my_perl: *mut PerlInterpreter) {
         } else {
             (None, None)
         };
+        let module = inspect_core::passes::deps::module_of_file(&name);
+        let snapshot = if status == "in_progress" || reload_of.is_some() {
+            module.as_deref().map(|m| snapshot(&perl, m))
+        } else {
+            None
+        };
         let cop = Cop::from_raw(sys::PL_curcop!(my_perl));
         let ev = RequireEvent {
-            module: inspect_core::passes::deps::module_of_file(&name),
+            module,
             name,
             from_file: cop.as_ref().and_then(|c| c.file()),
             from_line: cop.map(|c| c.line()).unwrap_or(0),
@@ -199,6 +224,7 @@ unsafe fn record(my_perl: *mut PerlInterpreter) {
             stack,
             path,
             reload_of,
+            snapshot,
         };
         EVENTS.with(|e| e.borrow_mut().push(ev));
     }
@@ -296,4 +322,61 @@ fn compiled_as(perl: &Perl, name: &str, path: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// What `package` provides right now: defined subs, the `import` method
+/// it resolves to, `@ISA`, `@EXPORT`, `@EXPORT_OK`.
+fn snapshot(perl: &Perl, package: &str) -> PackageSnapshot {
+    let my_perl = perl.as_ptr();
+    let mut snap = PackageSnapshot {
+        package: package.to_string(),
+        subs: Vec::new(),
+        import: None,
+        isa: array_strings(perl, &format!("{package}::ISA")),
+        export: array_strings(perl, &format!("{package}::EXPORT")),
+        export_ok: array_strings(perl, &format!("{package}::EXPORT_OK")),
+    };
+    let Some(stash) = perl.gv_stashpv(package, 0) else {
+        return snap;
+    };
+    for (key, val) in stash.iter(perl) {
+        let cv = match val.kind() {
+            // GvCVu: not a method cache entry (GvCVGEN == 0)
+            SvKind::Glob(gv) => Cv::from_raw(unsafe { thx::GvCVu(my_perl, gv.as_ptr()) }),
+            // simple subs are stored as a reference to the CV
+            SvKind::Ref(target) => match target.kind() {
+                SvKind::Code(cv) => Some(cv),
+                _ => None,
+            },
+            _ => None,
+        };
+        if cv.is_some_and(|cv| cv.is_xsub() || !cv.root().is_null()) {
+            snap.subs.push(String::from_utf8_lossy(key).into_owned());
+        }
+    }
+    snap.subs.sort();
+    let gv =
+        unsafe { thx::Perl_gv_fetchmeth_pvn(my_perl, stash.as_ptr(), c"import".as_ptr(), 6, 0, 0) };
+    snap.import = Gv::from_raw(gv)
+        .and_then(|gv| gv.cv())
+        .filter(|cv| cv.is_xsub() || !cv.root().is_null())
+        .and_then(|cv| cv.names(perl))
+        .map(|(pkg, _)| pkg);
+    snap
+}
+
+/// String elements of the package array `name` (empty when absent).
+fn array_strings(perl: &Perl, name: &str) -> Vec<String> {
+    let Ok(cname) = std::ffi::CString::new(name) else {
+        return Vec::new();
+    };
+    let av = unsafe { thx::Perl_get_av(perl.as_ptr(), cname.as_ptr(), 0) };
+    if av.is_null() {
+        return Vec::new();
+    }
+    let av = unsafe { Av::from_raw_unchecked(av) };
+    av.iter(perl)
+        .flatten()
+        .map(|sv| String::from_utf8_lossy(sv.pv(perl)).into_owned())
+        .collect()
 }

@@ -65,6 +65,21 @@ subtest 'path and reload_of' => sub {
     is $again->{reload_of}, './t/lib-deps/Cyc/Router.pm', 'reload of the other key';
 };
 
+subtest 'snapshot of a module still compiling' => sub {
+    LibPerlRs::Inspect::require_trace_start();
+    eval q{ require Imp::Quiet; 1 } or die $@;
+    my ($ev) = grep { $_->{status} eq 'in_progress' } @{ LibPerlRs::Inspect::require_events() };
+    is $ev->{name}, 'Imp/Quiet.pm', 'the cyclic use';
+    is_deeply $ev->{snapshot}, {
+        package   => 'Imp::Quiet',
+        subs      => ['import'],      # imported from Exporter; shout not yet
+        import    => 'Exporter::import',
+        isa       => [],
+        export    => [],              # set in a BEGIN after the cycle
+        export_ok => [],
+    }, 'snapshot';
+};
+
 subtest 'stop' => sub {
     LibPerlRs::Inspect::require_trace_start();
     LibPerlRs::Inspect::require_trace_stop();

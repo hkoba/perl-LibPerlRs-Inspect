@@ -75,6 +75,22 @@ subtest 'main program reloaded as a module' => sub {
         'no edge from base.pm to the class it loaded';
 };
 
+subtest 'what a module still compiling was missing' => sub {
+    my $deps = LibPerlRs::Inspect::Deps->run_perl("-I$lib", '-e', 'use Imp::Quiet');
+    ok !defined $deps->{compile_error}, 'compiles (silently imports nothing)';
+    my ($e) = grep { $_->{snapshot} } @{ $deps->{edges} };
+    is "$e->{from} -> $e->{to}", 'Imp::Listener -> Imp::Quiet', 'edge';
+    is_deeply $e->{args}, [], 'use without arguments';
+    is_deeply $e->{later}, { export => ['shout'], subs => ['shout'] }, 'set up later';
+    is_deeply $e->{missing}, ['shout'], '@EXPORT names it failed to import';
+
+    $deps = LibPerlRs::Inspect::Deps->run_perl("-I$lib", '-e', 'use Imp::Lib');
+    like $deps->{compile_error}, qr/"helper" is not exported/, 'Exporter refused';
+    ($e) = grep { $_->{snapshot} } @{ $deps->{edges} };
+    is_deeply $e->{args}, ['helper'], 'requested';
+    is_deeply $e->{missing}, ['helper'], 'not exportable at that moment';
+};
+
 # (output, exit status) of examples/module_cycles.pl
 sub module_cycles {
     my @cmd = ($^X, (map { "-I$_" } grep { !ref } @INC),
@@ -102,6 +118,11 @@ subtest 'examples/module_cycles.pl' => sub {
     like $out, qr{^  Cyc::Main was compiled up to \S+/Cyc/Main\.pm line 9 at that point$}m,
         'where the main program stood';
     unlike $out, qr/Cyc::Hub requires Cyc::Hub/, 'no self edge';
+
+    ($out, $status) = module_cycles('--', "-I$lib", '-e', 'use Imp::Quiet');
+    is $status, 1, 'exit status 1: cycle';
+    like $out, qr/^  Imp::Quiet provided then: import Exporter::import; subs: import\n  set up only later: \@EXPORT \(shout\); subs: shout\n  !! `use Imp::Quiet` imported nothing: \@EXPORT was still empty \(later: shout\)$/m,
+        'snapshot explained';
 
     ($out, $status) = module_cycles('--', "-I$lib", '-e', 'use Deps::Broken');
     is $status, 2, 'exit status 2 on a compile error';

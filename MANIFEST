@@ -126,4 +126,8 @@ t/lib-deps/Deps/B.pm
 t/lib-deps/Deps/Broken.pm
 t/lib-deps/Deps/C.pm
 t/lib-deps/Deps/Child.pm
+t/lib-deps/Imp/Lib.pm
+t/lib-deps/Imp/Listener.pm
+t/lib-deps/Imp/Quiet.pm
+t/lib-deps/Imp/User.pm
 t/lib/Fixtures.pm

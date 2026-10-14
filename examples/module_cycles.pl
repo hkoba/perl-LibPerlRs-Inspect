@@ -23,6 +23,9 @@
 #     finished. Code in the requiring module that runs at that point
 #     (import, BEGIN, a use of the target's subs or @ISA) sees the target
 #     only partly defined.
+# For both, the state of the target package at that moment is shown, what
+# it set up only later, and the names a `use` asked for that it could not
+# provide yet (Exporter-style import).
 # Then each cycle (strongly connected component of the dependency graph)
 # is printed with the edges inside it; the edges above are marked "!!".
 #
@@ -131,7 +134,33 @@ sub explain {
     printf "  %s was compiled up to %s line %d at that point\n",
         $e->{to}, $paused->{file}, $paused->{line}
         if $paused;
+    if (my $snap = $e->{snapshot}) {
+        printf "  %s provided then: %s\n", $snap->{package}, describe($snap) || 'nothing';
+        printf "  set up only later: %s\n", describe($e->{later}) if $e->{later};
+    }
+    if (my $missing = $e->{missing}) {
+        if (@{ $e->{args} }) {
+            printf "  !! requested but not available then: %s\n", join ' ', @$missing;
+        } else {
+            printf "  !! `use %s` imported nothing: \@EXPORT was still empty (later: %s)\n",
+                $e->{to}, join ' ', @$missing;
+        }
+    }
     print "\n";
+}
+
+# "import Exporter::import; @EXPORT_OK (a b); subs: x y" for a snapshot
+# or its `later` part
+sub describe {
+    my ($state) = @_;
+    my @parts;
+    push @parts, "import $state->{import}" if defined $state->{import};
+    for (['isa', '@ISA'], ['export', '@EXPORT'], ['export_ok', '@EXPORT_OK']) {
+        my ($field, $label) = @$_;
+        push @parts, "$label (@{ $state->{$field} })" if @{ $state->{$field} || [] };
+    }
+    push @parts, "subs: @{ $state->{subs} }" if @{ $state->{subs} || [] };
+    join '; ', @parts;
 }
 
 # Tarjan's strongly connected components; iterative, so that long

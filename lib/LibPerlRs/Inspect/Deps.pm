@@ -117,6 +117,7 @@ sub collect {
             status => $ev->{status},
             stack  => $ev->{stack},
             (defined $ev->{reload_of} ? (reload_of => $ev->{reload_of}) : ()),
+            ($ev->{snapshot} ? (snapshot => $ev->{snapshot}) : ()),
         );
         my $from_key = $key_of{ $ev->{from_file} } // '';
         my $user     = @{ $ev->{stack} } ? $path_of{ $ev->{stack}[-1] } : $program;
@@ -140,6 +141,7 @@ sub collect {
                 kind => $b ? $b->{kind} : 'require',
                 file => $ev->{from_file},
                 line => $ev->{from_line},
+                ($b && $b->{args} ? (args => $b->{args}) : ()),
             };
         }
         $traced{ $ev->{from_file} } = 1;
@@ -164,6 +166,9 @@ sub collect {
             };
         }
     }
+
+    # what a partly compiled target was missing when it was required
+    _compare_snapshot($_) for grep { $_->{snapshot} } @edges;
 
     # 3. static requires inside the subs of traced files (lazy loading;
     # they may never run)
@@ -199,6 +204,66 @@ sub collect {
     }
 
     { program => $program, nodes => \%nodes, edges => \@edges };
+}
+
+# The state of a package now: the same fields as a require_events()
+# snapshot
+sub _package_state {
+    my ($pkg) = @_;
+    no strict 'refs';
+    my $stash = \%{"${pkg}::"};
+    require B;
+    # defined subs, imported ones included; not method cache entries
+    my @subs = grep {
+        !/::\z/ && defined &{"${pkg}::$_"}
+            && !(ref \$stash->{$_} eq 'GLOB' && B::svref_2object(\$stash->{$_})->CVGEN)
+    } keys %$stash;
+    return {
+        subs      => [ sort @subs ],
+        isa       => [ @{"${pkg}::ISA"} ],
+        export    => [ @{"${pkg}::EXPORT"} ],
+        export_ok => [ @{"${pkg}::EXPORT_OK"} ],
+    };
+}
+
+# Add to an edge with a snapshot:
+#   later   => what the target set up after that moment ({ subs, isa,
+#              export, export_ok }, only non-empty lists)
+#   missing => names the `use` asked for that the target could not
+#              provide at that moment (Exporter-style import, or no import
+#              at all); for a `use` without arguments, the @EXPORT names
+#              that were not there yet
+sub _compare_snapshot {
+    my ($edge) = @_;
+    my $snap = $edge->{snapshot};
+    my $now  = _package_state($snap->{package});
+    my %later;
+    for my $field (qw(subs isa export export_ok)) {
+        my %had = map { $_ => 1 } @{ $snap->{$field} };
+        my @new = grep { !$had{$_} } @{ $now->{$field} };
+        $later{$field} = \@new if @new;
+    }
+    $edge->{later} = \%later if %later;
+
+    return unless $edge->{kind} eq 'use' && $edge->{args};
+    my $import = $snap->{import} // '';
+    my @args = @{ $edge->{args} };
+    my @missing;
+    if ($import eq '' || $import eq 'UNIVERSAL::import') {
+        @missing = @args;
+    } elsif ($import =~ /^Exporter(?:::Heavy)?::/) {
+        if (!@args) {
+            @missing = @{ $later{export} || [] };
+        } else {
+            my %ok = map { (my $n = $_) =~ s/^&//; ($n => 1) }
+                @{ $snap->{export} }, @{ $snap->{export_ok} };
+            @missing = grep {
+                (my $n = $_) =~ s/^&//;
+                !/^[:!\/]/ && !$ok{$n};
+            } @args;
+        }
+    }
+    $edge->{missing} = \@missing if @missing;
 }
 
 # How the file an edge requires came to be required: the edges that
@@ -331,6 +396,15 @@ A node is named after its package for a C<*.pm> file, after its C<%INC>
 key for other loaded files, and after its path for the main program,
 unless the main program is reloaded as a module (C<reload_of>), in which
 case both are the module's node (marked C<program>).
+
+An edge whose target was still compiling or is reloaded also has
+C<snapshot> (what the target package provided at that moment, see
+C<require_events>), C<later> (what it set up afterwards: lists of
+C<subs>, C<isa>, C<export>, C<export_ok>) and, for a C<use> with an
+Exporter-style or no C<import>, C<missing>: the requested names that were
+not exportable yet (for a C<use> without arguments, the C<@EXPORT> names
+added later, i.e. what it silently failed to import). C<use> edges carry
+the import C<args>.
 
 C<< LibPerlRs::Inspect::Deps->chain($deps, $edge) >> returns how the
 target of an edge with a C<stack> came to be required: the edges that
