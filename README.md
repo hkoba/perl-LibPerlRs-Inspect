@@ -115,6 +115,51 @@ guard conditions, single-expression `return`s and the implicit final
 value; assignments, call arguments, `die` messages, loop conditions and
 the `&&=` / `||=` / `//=` family stay opaque.
 
+## Module dependencies
+
+`LibPerlRs::Inspect` also exposes building blocks for tools that look at
+how modules depend on each other. They report facts about the running
+interpreter; graphs and policies are up to the tool:
+
+- `begin_capture($on)` / `begins()`: the BEGIN blocks of every file
+  loaded while capture is on, with the `use` / `no` statement each was
+  compiled from (`module`, `version`, `args`) recognized from the op tree
+- `require_sites($coderef)`: the constant `require`s inside a sub
+- `require_trace_start()` / `require_events()`: every `require` / `use`
+  that runs, with its location, the files being loaded at that moment and
+  a status; `in_progress` means the target is still compiling (the
+  `require` closes a compile-time dependency cycle)
+- `packages()` / `inheritance($pkg)`: the package list, `@ISA` and MRO
+
+`LibPerlRs::Inspect::Deps` merges them into one edge list (`use` / `no` /
+`require` / `parent` / `require_static`), either in-process or for a whole
+program compiled with `perl -c`:
+
+```console
+$ perl -Mblib -MLibPerlRs::Inspect::Deps=deps.json -c -Ilib bin/app.pl
+```
+
+Two example tools are built on it. `examples/module_cycles.pl` finds
+dependency cycles (strongly connected components) and flags the edges
+followed while their target was still compiling:
+
+```console
+$ perl -Mblib examples/module_cycles.pl -- -It/lib-deps -e 'use Deps::A'
+cycle 1: Deps::A, Deps::B
+  Deps::A -> Deps::B  (use at t/lib-deps/Deps/A.pm line 3)
+  Deps::B -> Deps::A  (use at t/lib-deps/Deps/B.pm line 3)  !! still compiling
+```
+
+`examples/module_graph.pl` prints the graph in Graphviz DOT format.
+Both take `--prefix=DIR` to keep only the modules under a directory and
+`--static` to include the `require`s inside subs.
+
+Known limits: `#line` directives change the file a dependency is
+attributed to; code compiled by string eval, `require $var` and `use if`
+are not resolved statically; modules loaded before tracing starts are not
+traced themselves (edges to them are still recorded); `do FILE` is not
+traced.
+
 ## perl-inspect CLI
 
 `crates/inspect-cli` provides `perl-inspect`, a standalone binary with

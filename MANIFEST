@@ -35,8 +35,11 @@ crates/inspect-report/tests/api.rs
 crates/inspect-xs/Cargo.toml
 crates/inspect-xs/build.rs
 crates/inspect-xs/src/lib.rs
+examples/module_cycles.pl
+examples/module_graph.pl
 examples/truth_table.pl
 lib/LibPerlRs/Inspect.pm
+lib/LibPerlRs/Inspect/Deps.pm
 t/00_load.t
 t/01_opnames.t
 t/10_capture_golden.t
@@ -49,6 +52,7 @@ t/40_types.t
 t/41_lints.t
 t/50_deps.t
 t/51_require_trace.t
+t/52_deps_module.t
 t/golden/5.42-nonthreaded/arm_stmts.json
 t/golden/5.42-nonthreaded/bool_return.json
 t/golden/5.42-nonthreaded/branches.json

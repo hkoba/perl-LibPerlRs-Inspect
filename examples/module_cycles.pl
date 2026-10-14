@@ -1,0 +1,124 @@
+#!/usr/bin/env perl
+# Find dependency cycles between the modules a program loads.
+#
+#   perl -Mblib examples/module_cycles.pl [--static] [--prefix=DIR]... -- PERL-ARGS...
+#   perl -Mblib examples/module_cycles.pl [--static] [--prefix=DIR]... deps.json
+#
+#   perl -Mblib examples/module_cycles.pl --prefix=lib -- -Ilib bin/app.pl
+#   perl -Mblib examples/module_cycles.pl -- -It/lib-deps -e 'use Deps::A'
+#
+# PERL-ARGS are compiled (perl -c) in a child perl with
+# LibPerlRs::Inspect::Deps loaded first; a single *.json argument is read
+# as the output of `perl -MLibPerlRs::Inspect::Deps=deps.json -c ...`
+# instead.
+#
+# Each cycle (strongly connected component of the dependency graph) is
+# printed with the edges inside it. An edge marked "!! still compiling"
+# was followed while its target had not finished compiling: code in the
+# requiring module that runs at that point (import, BEGIN, a use of the
+# target's subs or @ISA) sees the target only partly defined. Those are
+# the cycles that usually matter.
+#
+# Edges: use / no / require that ran, use parent / base. With --static,
+# also the constant `require`s inside subs (lazy loading, which is a
+# common way to break a cycle, so they are left out by default).
+# --prefix keeps only modules whose file starts with one of the given
+# directories (plus the main program). Exit status is 1 when a cycle is
+# found.
+use strict;
+use warnings;
+use Getopt::Long qw(:config require_order);
+use LibPerlRs::Inspect::Deps;
+
+GetOptions('static' => \my $static, 'prefix=s' => \my @prefixes)
+    or die "bad options\n";
+@ARGV or die "usage: $0 [--static] [--prefix=DIR]... (-- PERL-ARGS... | deps.json)\n";
+
+my $deps = (@ARGV == 1 && $ARGV[0] =~ /\.json\z/)
+    ? LibPerlRs::Inspect::Deps->read_json($ARGV[0])
+    : LibPerlRs::Inspect::Deps->run_perl(@ARGV);
+
+my $nodes = $deps->{nodes};
+my $keep  = sub {
+    my ($id) = @_;
+    return 1 unless @prefixes;
+    my $n = $nodes->{$id} or return 0;
+    return 1 unless defined $n->{inc};    # the main program
+    my $file = $n->{file} // return 0;
+    grep { index($file, $_) == 0 } @prefixes;
+};
+
+my (%succ, %edges_of);
+for my $e (@{ $deps->{edges} }) {
+    next if $e->{kind} eq 'require_static' && !$static;
+    next if $e->{from} eq $e->{to};
+    next unless $keep->($e->{from}) && $keep->($e->{to});
+    $succ{ $e->{from} }{ $e->{to} } = 1;
+    $succ{ $e->{to} } //= {};
+    push @{ $edges_of{ $e->{from} } }, $e;
+}
+
+my @cycles = grep { @$_ > 1 } tarjan_scc(\%succ);
+if (!@cycles) {
+    print "no cycles\n";
+    exit 0;
+}
+
+my $n = 0;
+for my $scc (@cycles) {
+    my %in = map { $_ => 1 } @$scc;
+    printf "cycle %d: %s\n", ++$n, join ', ', sort @$scc;
+    for my $from (sort @$scc) {
+        for my $e (grep { $in{ $_->{to} } } @{ $edges_of{$from} || [] }) {
+            printf "  %s -> %s  (%s at %s line %d)%s\n",
+                $from, $e->{to}, $e->{kind}, $e->{file}, $e->{line},
+                ($e->{status} // '') eq 'in_progress' ? "  !! still compiling" : '';
+        }
+    }
+}
+exit 1;
+
+# Tarjan's strongly connected components; iterative, so that long
+# dependency chains do not hit deep recursion.
+sub tarjan_scc {
+    my ($succ) = @_;
+    my ($index, %idx, %low, %on, @stack, @sccs) = (0);
+    for my $root (sort keys %$succ) {
+        next if exists $idx{$root};
+        my @work = ([$root, [sort keys %{ $succ->{$root} }]]);
+        $idx{$root} = $low{$root} = $index++;
+        push @stack, $root;
+        $on{$root} = 1;
+        while (@work) {
+            my ($v, $kids) = @{ $work[-1] };
+            if (@$kids) {
+                my $w = shift @$kids;
+                if (!exists $idx{$w}) {
+                    $idx{$w} = $low{$w} = $index++;
+                    push @stack, $w;
+                    $on{$w} = 1;
+                    push @work, [$w, [sort keys %{ $succ->{$w} }]];
+                } elsif ($on{$w}) {
+                    $low{$v} = $idx{$w} if $idx{$w} < $low{$v};
+                }
+                next;
+            }
+            pop @work;
+            if (@work) {
+                my $parent = $work[-1][0];
+                $low{$parent} = $low{$v} if $low{$v} < $low{$parent};
+            }
+            if ($low{$v} == $idx{$v}) {
+                my @scc;
+                while (1) {
+                    my $w = pop @stack;
+                    $on{$w} = 0;
+                    push @scc, $w;
+                    last if $w eq $v;
+                }
+                push @sccs, \@scc;
+            }
+        }
+    }
+    @sccs;
+}
