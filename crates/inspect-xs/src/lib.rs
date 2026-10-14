@@ -146,6 +146,40 @@ fn inheritance(my_perl: &Perl, package: &str) -> Option<Rv<Hv>> {
     Some(build_hv(my_perl, &m).into_rv(my_perl))
 }
 
+/// `LibPerlRs::Inspect::require_trace_start()` — clear the recorded events
+/// and start recording every `require` / `use` executed from now on.
+#[xs_sub]
+fn require_trace_start() {
+    inspect_capture::reqtrace::start();
+}
+
+/// `LibPerlRs::Inspect::require_trace_stop()` — stop recording (events
+/// are kept).
+#[xs_sub]
+fn require_trace_stop() {
+    inspect_capture::reqtrace::stop();
+}
+
+/// `LibPerlRs::Inspect::require_events()` — arrayref of the recorded
+/// requires: `{ name, module, from_file, from_line, status, stack }`.
+#[xs_sub]
+fn require_events(my_perl: &Perl) -> Rv<Av> {
+    let av = Av::new(my_perl);
+    for ev in inspect_capture::reqtrace::events() {
+        let mut m = serde_json::Map::new();
+        m.insert("name".into(), json!(ev.name));
+        if let Some(module) = ev.module {
+            m.insert("module".into(), json!(module));
+        }
+        m.insert("from_file".into(), json!(ev.from_file));
+        m.insert("from_line".into(), json!(ev.from_line));
+        m.insert("status".into(), json!(ev.status));
+        m.insert("stack".into(), json!(ev.stack));
+        av.push(my_perl, build_hv(my_perl, &m).into_rv(my_perl).as_sv());
+    }
+    av.into_rv(my_perl)
+}
+
 /// A new reference to `cv` (\&sub). newRV increments the referent.
 fn code_ref(perl: &Perl, cv: Cv) -> Sv {
     let my_perl = perl.as_ptr();
@@ -204,5 +238,8 @@ xs_boot! {
         require_sites,
         packages,
         inheritance,
+        require_trace_start,
+        require_trace_stop,
+        require_events,
     ];
 }

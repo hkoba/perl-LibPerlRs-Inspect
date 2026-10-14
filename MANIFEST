@@ -11,6 +11,7 @@ crates/inspect-capture/src/capture.rs
 crates/inspect-capture/src/lib.rs
 crates/inspect-capture/src/packages.rs
 crates/inspect-capture/src/raw.rs
+crates/inspect-capture/src/reqtrace.rs
 crates/inspect-cli/Cargo.toml
 crates/inspect-cli/build.rs
 crates/inspect-cli/src/main.rs
@@ -47,6 +48,7 @@ t/22_logic.t
 t/40_types.t
 t/41_lints.t
 t/50_deps.t
+t/51_require_trace.t
 t/golden/5.42-nonthreaded/arm_stmts.json
 t/golden/5.42-nonthreaded/bool_return.json
 t/golden/5.42-nonthreaded/branches.json
@@ -113,6 +115,7 @@ t/golden/5.44-threaded/ternary.json
 t/golden/5.44-threaded/unpack_args.json
 t/lib-deps/Deps/A.pm
 t/lib-deps/Deps/B.pm
+t/lib-deps/Deps/Broken.pm
 t/lib-deps/Deps/C.pm
 t/lib-deps/Deps/Child.pm
 t/lib/Fixtures.pm

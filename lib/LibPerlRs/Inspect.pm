@@ -116,6 +116,37 @@ The C<use> statement text of a BEGIN (C<B::Deparse::begin_is_use>): undef
 for an opaque BEGIN, C<""> for a hint-bit pragma such as C<strict>. Loads
 B::Deparse on first call.
 
+=item require_trace_start()
+
+Start recording every C<require> (and so every C<use>) executed from now
+on, clearing the events recorded so far. Only C<require> ops compiled
+after this call are seen, so start before loading the code to inspect
+(C<BEGIN { LibPerlRs::Inspect::require_trace_start() }>, or from a module
+loaded with C<-M>).
+
+=item require_trace_stop()
+
+Stop recording. The events are kept.
+
+=item require_events()
+
+Arrayref of the recorded requires, in the order they ran:
+
+    {
+        name      => 'My/Util.pm',      # the %INC key
+        module    => 'My::Util',        # for *.pm files
+        from_file => 'lib/My/App.pm',   # where the require / use is
+        from_line => 4,
+        status    => 'load',            # see below
+        stack     => ['My/App.pm'],     # files being loaded, outermost first
+    }
+
+C<status> is C<load> (not yet loaded: loading starts), C<cached> (already
+loaded, nothing happens), C<in_progress> (in C<%INC> but still being
+loaded: the require closes a compile-time dependency cycle, and the target
+module is only partly defined at this point) or C<failed> (an earlier load
+failed). C<require VERSION> is not recorded, nor is C<do FILE>.
+
 =item packages()
 
 List of every package reachable from C<main::>.
