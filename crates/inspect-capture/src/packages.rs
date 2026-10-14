@@ -1,4 +1,4 @@
-//! Package enumeration and inheritance (`@ISA` / MRO) for the report.
+//! Package enumeration and inheritance (`@ISA` / MRO).
 //!
 //! `StashWalker` only reports subs, so a package that merely sets up
 //! inheritance (`package Child; use parent -norequire, 'Base';`) would be
@@ -11,7 +11,7 @@ use std::ffi::{CStr, CString};
 use libperl_rs::{Av, Perl, SvKind, thx};
 
 /// Inheritance of one package. Only produced for a non-empty `@ISA`.
-pub(crate) struct Inheritance {
+pub struct Inheritance {
     /// `@ISA` in declaration order
     pub isa: Vec<String>,
     /// MRO resolution order, the package itself first
@@ -24,7 +24,7 @@ pub(crate) struct Inheritance {
 /// Every package reachable from `main::`, in walk order. Same traversal
 /// as `StashWalker` (recurse into `Foo::`-suffixed globs, visit each
 /// package once) but emitting packages instead of subs.
-pub(crate) fn package_names(perl: &Perl) -> Vec<String> {
+pub fn package_names(perl: &Perl) -> Vec<String> {
     fn rec(perl: &Perl, pack: &str, seen: &mut HashSet<String>, out: &mut Vec<String>) {
         if !seen.insert(pack.to_string()) {
             return;
@@ -61,7 +61,7 @@ pub(crate) fn package_names(perl: &Perl) -> Vec<String> {
 
 /// `@ISA` / linear ISA / MRO name of `pack`, or `None` when its `@ISA` is
 /// absent or empty. Reading does not create `@ISA` (get_av flags = 0).
-pub(crate) fn inheritance(perl: &Perl, pack: &str) -> Option<Inheritance> {
+pub fn inheritance(perl: &Perl, pack: &str) -> Option<Inheritance> {
     let my_perl = perl.as_ptr();
     let isa_name = CString::new(format!("{pack}::ISA")).ok()?;
     let isa_av = unsafe { thx::Perl_get_av(my_perl, isa_name.as_ptr(), 0) };

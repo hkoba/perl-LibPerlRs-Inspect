@@ -6,7 +6,10 @@
 
 mod begins;
 mod capture;
+pub mod packages;
 mod raw;
 
-pub use begins::{FileBegins, FileUse, enable_begin_capture, file_begins};
+pub use begins::{
+    FileBegins, FileUse, enable_begin_capture, file_begins, saved_begins, set_begin_capture,
+};
 pub use capture::{capture_sub, exec_op_names};

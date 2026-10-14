@@ -49,24 +49,29 @@ pub struct FileBegins {
 
 /// Set `PL_savebegin`. Must be called **before `perl_parse`**.
 pub fn enable_begin_capture(perl: &Perl) {
+    set_begin_capture(perl, true);
+}
+
+/// Turn BEGIN capture (`PL_savebegin`) on or off. Only BEGINs that run
+/// while it is on are saved; when it is off they are freed after running.
+pub fn set_begin_capture(perl: &Perl, on: bool) {
     let my_perl = perl.as_ptr();
     #[cfg(perl_useithreads)]
     unsafe {
-        (*my_perl).Isavebegin = true;
+        (*my_perl).Isavebegin = on;
     }
     #[cfg(not(perl_useithreads))]
     unsafe {
         let _ = my_perl;
-        sys::PL_savebegin = true;
+        sys::PL_savebegin = on;
     }
 }
 
-/// From a parsed interpreter, return the BEGINs attributed to `file`
-/// (usually `$0`), classified into `use` statements / opaque.
-pub fn file_begins(perl: &Perl, file: &str) -> Result<FileBegins, String> {
+/// Every BEGIN CV saved in `PL_beginav_save` (empty unless BEGIN capture
+/// was enabled), in the order they ran — BEGINs of every file, including
+/// modules loaded transitively. The CVs are owned by `PL_beginav_save`.
+pub fn saved_begins(perl: &Perl) -> Vec<Cv> {
     let my_perl = perl.as_ptr();
-
-    // 1. Pick the BEGINs from PL_beginav_save whose CvFILE matches exactly
     let mut cvs: Vec<Cv> = Vec::new();
     unsafe {
         let av = sys::PL_beginav_save!(my_perl);
@@ -78,15 +83,23 @@ pub fn file_begins(perl: &Perl, file: &str) -> Result<FileBegins, String> {
                 if elem.is_null() {
                     continue;
                 }
-                let Some(cv) = Cv::from_raw(elem as *mut sys::CV) else {
-                    continue;
-                };
-                if cv.file().as_deref() == Some(file) {
+                if let Some(cv) = Cv::from_raw(elem as *mut sys::CV) {
                     cvs.push(cv);
                 }
             }
         }
     }
+    cvs
+}
+
+/// From a parsed interpreter, return the BEGINs attributed to `file`
+/// (usually `$0`), classified into `use` statements / opaque.
+pub fn file_begins(perl: &Perl, file: &str) -> Result<FileBegins, String> {
+    // 1. Pick the BEGINs from PL_beginav_save whose CvFILE matches exactly
+    let cvs: Vec<Cv> = saved_begins(perl)
+        .into_iter()
+        .filter(|cv| cv.file().as_deref() == Some(file))
+        .collect();
 
     // Line number (first COP). A BEGIN at line 0 was "injected by the
     // interpreter / launcher before line 1 of the source", so exclude it —

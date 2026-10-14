@@ -9,6 +9,7 @@ crates/inspect-capture/build.rs
 crates/inspect-capture/src/begins.rs
 crates/inspect-capture/src/capture.rs
 crates/inspect-capture/src/lib.rs
+crates/inspect-capture/src/packages.rs
 crates/inspect-capture/src/raw.rs
 crates/inspect-cli/Cargo.toml
 crates/inspect-cli/build.rs
@@ -19,6 +20,7 @@ crates/inspect-core/src/dump.rs
 crates/inspect-core/src/ir.rs
 crates/inspect-core/src/lib.rs
 crates/inspect-core/src/passes/argspec.rs
+crates/inspect-core/src/passes/deps.rs
 crates/inspect-core/src/passes/lints.rs
 crates/inspect-core/src/passes/logic.rs
 crates/inspect-core/src/passes/mod.rs
@@ -28,7 +30,6 @@ crates/inspect-core/src/render.rs
 crates/inspect-report/Cargo.toml
 crates/inspect-report/build.rs
 crates/inspect-report/src/lib.rs
-crates/inspect-report/src/packages.rs
 crates/inspect-report/tests/api.rs
 crates/inspect-xs/Cargo.toml
 crates/inspect-xs/build.rs
@@ -45,6 +46,7 @@ t/30_render.t
 t/22_logic.t
 t/40_types.t
 t/41_lints.t
+t/50_deps.t
 t/golden/5.42-nonthreaded/arm_stmts.json
 t/golden/5.42-nonthreaded/bool_return.json
 t/golden/5.42-nonthreaded/branches.json
@@ -109,4 +111,8 @@ t/golden/5.44-threaded/shift_style.json
 t/golden/5.44-threaded/signature.json
 t/golden/5.44-threaded/ternary.json
 t/golden/5.44-threaded/unpack_args.json
+t/lib-deps/Deps/A.pm
+t/lib-deps/Deps/B.pm
+t/lib-deps/Deps/C.pm
+t/lib-deps/Deps/Child.pm
 t/lib/Fixtures.pm

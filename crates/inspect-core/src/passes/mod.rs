@@ -1,6 +1,7 @@
 //! Analysis passes. All of them are pure Rust operating on SubIr (the owned IR).
 
 pub mod argspec;
+pub mod deps;
 pub mod lints;
 pub mod logic;
 pub mod retspec;
