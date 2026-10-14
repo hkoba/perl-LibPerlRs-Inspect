@@ -115,6 +115,111 @@ guard conditions, single-expression `return`s and the implicit final
 value; assignments, call arguments, `die` messages, loop conditions and
 the `&&=` / `||=` / `//=` family stay opaque.
 
+## Module dependencies
+
+`LibPerlRs::Inspect` also exposes building blocks for tools that look at
+how modules depend on each other. They report facts about the running
+interpreter; graphs and policies are up to the tool:
+
+- `begin_capture($on)` / `begins()`: the BEGIN blocks of every file
+  loaded while capture is on, with the `use` / `no` statement each was
+  compiled from (`module`, `version`, `args`) recognized from the op tree
+- `require_sites($coderef)`: the constant `require`s inside a sub
+- `require_trace_start()` / `require_events()`: every `require` / `use`
+  that runs, with its location, the files being loaded at that moment and
+  a status; `in_progress` means the target is still compiling (the
+  `require` closes a compile-time dependency cycle)
+- `packages()` / `inheritance($pkg)`: the package list, `@ISA` and MRO
+
+`LibPerlRs::Inspect::Deps` merges them into one edge list (`use` / `no` /
+`require` / `parent` / `require_static`), either in-process or for a whole
+program compiled with `perl -c`:
+
+```console
+$ perl -Mblib -MLibPerlRs::Inspect::Deps=deps.json -c -Ilib bin/app.pl
+```
+
+Two example tools are built on it. `examples/module_cycles.pl` finds
+dependency cycles (strongly connected components) and flags the edges
+followed while their target was still compiling:
+
+```console
+$ perl -Mblib examples/module_cycles.pl -- -It/lib-deps -e 'use Deps::A'
+cycle 1: Deps::A, Deps::B
+  Deps::A -> Deps::B  (use at t/lib-deps/Deps/A.pm line 3)
+  Deps::B -> Deps::A  (use at t/lib-deps/Deps/B.pm line 3)  !! still compiling
+```
+
+It also explains each require that usually causes trouble, with the
+chain of loads that led to it: a file compiled a second time (`reload`,
+typically a module given as the main program and reached again through
+a cycle, which redefines its subs) and a require of a module that is
+still compiling:
+
+```console
+$ perl -Mblib examples/module_cycles.pl -- -It/lib-deps t/lib-deps/Cyc/Main.pm
+compile failed:
+  Subroutine early redefined at t/lib-deps/Cyc/Main.pm line 8.
+  ...
+
+reload: Cyc::Main (t/lib-deps/Cyc/Main.pm) is compiled a second time; it was compiled as the main program
+  Cyc::Main (main program)
+    -> Cyc::Gate  (parent at t/lib-deps/Cyc/Main.pm line 9)
+    -> Cyc::Hub  (use at t/lib-deps/Cyc/Gate.pm line 4)
+    -> Cyc::Router  (require at t/lib-deps/Cyc/Hub.pm line 3)
+    -> Cyc::Main  (use at t/lib-deps/Cyc/Router.pm line 3)  !! reload
+  Cyc::Main was compiled up to t/lib-deps/Cyc/Main.pm line 9 at that point
+...
+```
+
+For both, it shows what the target package provided at that moment,
+what it set up only later, and what a `use` asked for that it could not
+provide yet. For example, a `use` without arguments that ran before the
+target filled `@EXPORT` compiles fine but imports nothing:
+
+```console
+$ perl -Mblib examples/module_cycles.pl -- -It/lib-deps -e 'use Imp::Quiet'
+still compiling: Imp::Listener requires Imp::Quiet (use at t/lib-deps/Imp/Listener.pm line 3)
+  ...
+  Imp::Quiet was compiled up to t/lib-deps/Imp/Quiet.pm line 6 at that point
+  Imp::Quiet provided then: import Exporter::import; subs: import
+  set up only later: @EXPORT (shout); subs: shout
+  !! `use Imp::Quiet` imported nothing: @EXPORT was still empty (later: shout)
+```
+
+`examples/load_tree.pl` prints the loads as a tree, indented under the
+file being compiled at each moment, marking failed loads, reloads and
+requires of a module still compiling:
+
+```console
+$ perl -Mblib examples/load_tree.pl -- -It/lib-deps t/lib-deps/Cyc/Main.pm
+note: the program is the module Cyc::Main; compiled as the main program it can
+be loaded a second time. Try --module=Cyc::Main to load it as a module.
+compile failed:
+  ...
+
+Cyc::Main
+  use base  (t/lib-deps/Cyc/Main.pm line 9)
+  parent Cyc::Gate  (t/lib-deps/Cyc/Main.pm line 9)  !! failed
+    use subs  (t/lib-deps/Cyc/Gate.pm line 3)
+    use Cyc::Hub  (t/lib-deps/Cyc/Gate.pm line 4)  !! failed
+      parent Cyc::Hub  (t/lib-deps/Cyc/Hub.pm line 8)  (same file)
+      require Cyc::Router  (t/lib-deps/Cyc/Hub.pm line 3)  !! failed
+        use Cyc::Main  (t/lib-deps/Cyc/Router.pm line 3)  !! reload, failed
+```
+
+`examples/module_graph.pl` prints the graph in Graphviz DOT format.
+All three take `--prefix=DIR` to keep only the modules under a directory
+and `--module=NAME` to load a module (`-e 'use NAME'`) rather than
+compile a file; `module_cycles.pl` and `module_graph.pl` take `--static`
+to include the `require`s inside subs.
+
+Known limits: `#line` directives change the file a dependency is
+attributed to; code compiled by string eval, `require $var` and `use if`
+are not resolved statically; modules loaded before tracing starts are not
+traced themselves (edges to them are still recorded); `do FILE` is not
+traced.
+
 ## perl-inspect CLI
 
 `crates/inspect-cli` provides `perl-inspect`, a standalone binary with

@@ -64,8 +64,7 @@
 
 use std::collections::BTreeMap;
 
-mod packages;
-
+use inspect_capture::packages;
 use libperl_rs::{Perl, StashWalker, SubEntry};
 use serde_json::{Map, Value, json};
 
