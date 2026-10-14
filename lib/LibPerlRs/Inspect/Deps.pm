@@ -49,69 +49,117 @@ sub _module_of {
 
 sub collect {
     my ($class) = @_;
+    my $program = $0;
+    my @events  = @{ LibPerlRs::Inspect::require_events() };
 
-    # CopFILE of a loaded file is its %INC value; map it back to the key
-    my %key_of;
+    # CopFILE of a loaded file is its %INC value (or, when the load
+    # failed and %INC no longer has it, the path the trace resolved);
+    # map it back to the key. The main program maps to the key it was
+    # reloaded as, which makes it the same node as that module.
+    my (%key_of, %path_of);
     for my $key (keys %INC) {
         my $path = $INC{$key};
-        $key_of{$path} = $key if defined $path && !ref $path;
+        next unless defined $path && !ref $path;
+        $key_of{$path} = $key;
+        $path_of{$key} = $path;
     }
+    for my $ev (@events) {
+        next unless $ev->{status} eq 'load';
+        if (defined $ev->{path}) {
+            $key_of{ $ev->{path} }   //= $ev->{name};
+            $path_of{ $ev->{name} } //= $ev->{path};
+        }
+        $key_of{$program} //= $ev->{name}
+            if defined $ev->{reload_of} && $ev->{reload_of} eq $program;
+    }
+
     my (%nodes, @edges);
     my $node_of_file = sub {
         my ($file) = @_;
         my $key = $key_of{$file};
         my $id  = defined $key ? (_module_of($key) // $key) : $file;
         $nodes{$id} //= { file => $file, defined $key ? (inc => $key) : () };
+        $nodes{$id}{program} = 1 if $file eq $program;
         $id;
     };
     my $node_of_key = sub {
         my ($key) = @_;
         my $id = _module_of($key) // $key;
         $nodes{$id} //= {
-            (defined $INC{$key} && !ref $INC{$key} ? (file => $INC{$key}) : ()),
+            (defined $path_of{$key} ? (file => $path_of{$key}) : ()),
             inc => $key,
         };
         $id;
     };
 
     my @begins = @{ LibPerlRs::Inspect::begins() };
-    my %use_at;
+    my (%use_at, %parent_at);
     for my $b (@begins) {
         next if $b->{kind} eq 'opaque' || !defined $b->{file};
         $use_at{ join "\0", $b->{file}, $b->{line} // 0, $b->{module} } = $b;
-    }
-
-    # 1. requires that ran, `use` / `no` told apart by their BEGIN
-    my %traced;    # files whose loading was traced
-    for my $ev (@{ LibPerlRs::Inspect::require_events() }) {
-        next unless defined $ev->{from_file};
-        my $b = $use_at{ join "\0", $ev->{from_file}, $ev->{from_line},
-            $ev->{module} // '' };
-        push @edges, {
-            from   => $node_of_file->($ev->{from_file}),
-            to     => $node_of_key->($ev->{name}),
-            kind   => $b ? $b->{kind} : 'require',
-            file   => $ev->{from_file},
-            line   => $ev->{from_line},
-            status => $ev->{status},
-        };
-        $traced{ $ev->{from_file} } = 1;
-        $traced{ $INC{ $ev->{name} } } = 1
-            if $ev->{status} eq 'load' && defined $INC{ $ev->{name} } && !ref $INC{ $ev->{name} };
-    }
-
-    # 2. use parent / use base: the classes they load
-    for my $b (@begins) {
-        next unless ($b->{module} // '') =~ /^(?:parent|base)\z/ && $b->{args};
+        # use parent / use base: the classes they load
+        next unless $b->{module} =~ /^(?:parent|base)\z/ && $b->{args};
         my @args = @{ $b->{args} };
         next if grep { $_ eq '-norequire' } @args;
-        for my $class (grep { !/^-/ } @args) {
+        $parent_at{ $b->{file} }{$_} //= $b for grep { !/^-/ } @args;
+    }
+
+    # 1. requires that ran, `use` / `no` told apart by their BEGIN. The
+    # require base.pm / parent.pm do is attributed to the `use base` /
+    # `use parent` of the file being compiled at that moment.
+    my %traced;    # files whose loading was traced
+    my %covered;   # parent BEGIN x class already turned into an edge
+    for my $ev (@events) {
+        next unless defined $ev->{from_file};
+        my %edge = (
+            to     => $node_of_key->($ev->{name}),
+            inc    => $ev->{name},
+            status => $ev->{status},
+            stack  => $ev->{stack},
+            (defined $ev->{reload_of} ? (reload_of => $ev->{reload_of}) : ()),
+        );
+        my $from_key = $key_of{ $ev->{from_file} } // '';
+        my $user     = @{ $ev->{stack} } ? $path_of{ $ev->{stack}[-1] } : $program;
+        my $pb       = $from_key =~ /^(?:parent|base)\.pm\z/ && defined $user
+            && defined $ev->{module} && $parent_at{$user}{ $ev->{module} };
+        if ($pb) {
+            $covered{"$pb\0$ev->{module}"} = 1;
+            push @edges, {
+                %edge,
+                from => $node_of_file->($user),
+                kind => 'parent',
+                file => $user,
+                line => $pb->{line},
+            };
+        } else {
+            my $b = $use_at{ join "\0", $ev->{from_file}, $ev->{from_line},
+                $ev->{module} // '' };
+            push @edges, {
+                %edge,
+                from => $node_of_file->($ev->{from_file}),
+                kind => $b ? $b->{kind} : 'require',
+                file => $ev->{from_file},
+                line => $ev->{from_line},
+            };
+        }
+        $traced{ $ev->{from_file} } = 1;
+        $traced{ $path_of{ $ev->{name} } } = 1
+            if $ev->{status} eq 'load' && defined $path_of{ $ev->{name} };
+    }
+
+    # 2. use parent / use base whose require was not seen (e.g. ran
+    # before tracing started)
+    for my $file (sort keys %parent_at) {
+        for my $class (sort keys %{ $parent_at{$file} }) {
+            my $b = $parent_at{$file}{$class};
+            next if $covered{"$b\0$class"};
             (my $key = "$class.pm") =~ s{::}{/}g;
             push @edges, {
-                from => $node_of_file->($b->{file}),
+                from => $node_of_file->($file),
                 to   => $node_of_key->($key),
+                inc  => $key,
                 kind => 'parent',
-                file => $b->{file},
+                file => $file,
                 line => $b->{line},
             };
         }
@@ -150,7 +198,26 @@ sub collect {
         }
     }
 
-    { nodes => \%nodes, edges => \@edges };
+    { program => $program, nodes => \%nodes, edges => \@edges };
+}
+
+# How the file an edge requires came to be required: the edges that
+# loaded each file on its loading stack, outermost first, then the edge
+# itself. Works on the data returned by collect (or read back from JSON).
+sub chain {
+    my ($class, $deps, $edge) = @_;
+    my @stack = @{ $edge->{stack} || [] };
+    my @hops;
+    for my $i (0 .. $#stack) {
+        my ($hop) = grep {
+            ($_->{status} // '') eq 'load'
+                && $_->{inc} eq $stack[$i]
+                && @{ $_->{stack} } == $i
+                && join("\0", @{ $_->{stack} }) eq join("\0", @stack[0 .. $i - 1])
+        } @{ $deps->{edges} };
+        push @hops, $hop if $hop;
+    }
+    (@hops, $edge);
 }
 
 sub write_json {
@@ -238,31 +305,38 @@ C<examples/module_graph.pl>).
 The result of C<collect> is:
 
     {
+        program => 'bin/app.pl',          # $0
         nodes => {
             'My::App' => { file => 'lib/My/App.pm', inc => 'My/App.pm' },
-            'bin/app.pl' => { file => 'bin/app.pl' },
+            'bin/app.pl' => { file => 'bin/app.pl', program => 1 },
             ...
         },
         edges => [
             {
-                from   => 'bin/app.pl',
-                to     => 'My::App',
-                kind   => 'use',          # see below
-                file   => 'bin/app.pl',   # where the dependency is written
-                line   => 3,
-                status => 'load',         # require kinds only
+                from      => 'bin/app.pl',
+                to        => 'My::App',
+                inc       => 'My/App.pm',    # the %INC key of the target
+                kind      => 'use',          # see below
+                file      => 'bin/app.pl',   # where the dependency is written
+                line      => 3,
+                status    => 'load',         # edges from require_events only:
+                stack     => [],             #   see LibPerlRs::Inspect
+                reload_of => ...,            #   require_events
             },
             ...
         ],
     }
 
-When compilation fails, the data seen up to that point is still written
-(CHECK blocks run after a failed compilation too). C<run_perl> adds the
-child's error output as C<compile_error>; C<collect_error> is set when
-collecting itself failed.
-
 A node is named after its package for a C<*.pm> file, after its C<%INC>
-key for other loaded files, and after its path for the main program.
+key for other loaded files, and after its path for the main program,
+unless the main program is reloaded as a module (C<reload_of>), in which
+case both are the module's node (marked C<program>).
+
+C<< LibPerlRs::Inspect::Deps->chain($deps, $edge) >> returns how the
+target of an edge with a C<stack> came to be required: the edges that
+loaded each file on the stack, outermost first, then the edge itself.
+The first hop out of the target in that list shows the line where the
+target's own compilation was suspended.
 
 Edge kinds:
 
@@ -280,8 +354,8 @@ module, from a C<use parent> or C<base> on behalf of the user, ...).
 =item parent
 
 A class loaded by C<use parent> / C<use base> (no edge with
-C<-norequire>). The C<require> those modules perform is also listed as a
-C<require> edge from F<parent.pm> / F<base.pm>.
+C<-norequire>). The C<require> F<parent.pm> / F<base.pm> perform is
+attributed to the C<use> line, so the edge also carries its C<status>.
 
 =item require_static
 

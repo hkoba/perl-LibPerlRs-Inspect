@@ -161,7 +161,8 @@ fn require_trace_stop() {
 }
 
 /// `LibPerlRs::Inspect::require_events()` — arrayref of the recorded
-/// requires: `{ name, module, from_file, from_line, status, stack }`.
+/// requires: `{ name, module, from_file, from_line, status, stack, path,
+/// reload_of }`.
 #[xs_sub]
 fn require_events(my_perl: &Perl) -> Rv<Av> {
     let av = Av::new(my_perl);
@@ -175,6 +176,12 @@ fn require_events(my_perl: &Perl) -> Rv<Av> {
         m.insert("from_line".into(), json!(ev.from_line));
         m.insert("status".into(), json!(ev.status));
         m.insert("stack".into(), json!(ev.stack));
+        if let Some(path) = ev.path {
+            m.insert("path".into(), json!(path));
+        }
+        if let Some(r) = ev.reload_of {
+            m.insert("reload_of".into(), json!(r));
+        }
         av.push(my_perl, build_hv(my_perl, &m).into_rv(my_perl).as_sv());
     }
     av.into_rv(my_perl)

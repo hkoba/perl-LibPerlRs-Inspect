@@ -150,6 +150,28 @@ cycle 1: Deps::A, Deps::B
   Deps::B -> Deps::A  (use at t/lib-deps/Deps/B.pm line 3)  !! still compiling
 ```
 
+It also explains each require that usually causes trouble, with the
+chain of loads that led to it: a file compiled a second time (`reload`,
+typically a module given as the main program and reached again through
+a cycle, which redefines its subs) and a require of a module that is
+still compiling:
+
+```console
+$ perl -Mblib examples/module_cycles.pl -- -It/lib-deps t/lib-deps/Cyc/Main.pm
+compile failed:
+  Subroutine early redefined at t/lib-deps/Cyc/Main.pm line 8.
+  ...
+
+reload: Cyc::Main (t/lib-deps/Cyc/Main.pm) is compiled a second time; it was compiled as the main program
+  Cyc::Main (main program)
+    -> Cyc::Gate  (parent at t/lib-deps/Cyc/Main.pm line 9)
+    -> Cyc::Hub  (use at t/lib-deps/Cyc/Gate.pm line 4)
+    -> Cyc::Router  (require at t/lib-deps/Cyc/Hub.pm line 3)
+    -> Cyc::Main  (use at t/lib-deps/Cyc/Router.pm line 3)  !! reload
+  Cyc::Main was compiled up to t/lib-deps/Cyc/Main.pm line 9 at that point
+...
+```
+
 `examples/module_graph.pl` prints the graph in Graphviz DOT format.
 Both take `--prefix=DIR` to keep only the modules under a directory and
 `--static` to include the `require`s inside subs.

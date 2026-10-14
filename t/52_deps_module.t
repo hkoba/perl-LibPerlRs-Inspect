@@ -37,7 +37,8 @@ subtest 'run_perl (perl -c in a child)' => sub {
 subtest 'use parent' => sub {
     my $deps = LibPerlRs::Inspect::Deps->run_perl("-I$lib", '-e',
         'package Kid; use parent "Deps::C"; package Orphan; use parent -norequire, "Deps::A"');
-    is_deeply edges($deps, 'parent'), ['-e -> Deps::C parent'], 'no edge with -norequire';
+    is_deeply edges($deps, 'parent'), ['-e -> Deps::C parent load'],
+        'the require parent.pm did, attributed to the use line; no edge with -norequire';
 };
 
 subtest 'compile error' => sub {
@@ -53,6 +54,25 @@ subtest 'declared-only subs' => sub {
     ok !defined $deps->{compile_error}, 'compiles';
     ok !defined $deps->{collect_error}, 'collected';
     ok scalar(grep { $_->{to} eq 'Cyc::Hub' } @{ $deps->{edges} }), 'edges';
+};
+
+subtest 'main program reloaded as a module' => sub {
+    my $deps = LibPerlRs::Inspect::Deps->run_perl("-I$lib", "$lib/Cyc/Main.pm");
+    like $deps->{compile_error}, qr/Subroutine early redefined/, 'the reload broke it';
+    is $deps->{program}, "$lib/Cyc/Main.pm", 'program';
+    ok $deps->{nodes}{'Cyc::Main'}{program}, 'program and module are one node';
+    my ($reload) = grep { defined $_->{reload_of} } @{ $deps->{edges} };
+    is_deeply [ @$reload{qw(from to kind line reload_of)} ],
+        ['Cyc::Router', 'Cyc::Main', 'use', 3, "$lib/Cyc/Main.pm"], 'reload edge';
+    is_deeply [ map { "$_->{from} -> $_->{to} $_->{kind} $_->{line}" }
+            LibPerlRs::Inspect::Deps->chain($deps, $reload) ], [
+        'Cyc::Main -> Cyc::Gate parent 9',    # base.pm's require, at the use base line
+        'Cyc::Gate -> Cyc::Hub use 4',
+        'Cyc::Hub -> Cyc::Router require 3',
+        'Cyc::Router -> Cyc::Main use 3',
+    ], 'chain';
+    ok !grep({ $_->{from} eq 'base' && $_->{to} =~ /^Cyc::/ } @{ $deps->{edges} }),
+        'no edge from base.pm to the class it loaded';
 };
 
 # (output, exit status) of examples/module_cycles.pl
@@ -74,6 +94,14 @@ subtest 'examples/module_cycles.pl' => sub {
     ($out, $status) = module_cycles('--', "-I$lib", '-e', 'use Deps::C');
     is $status, 0, 'exit status 0 without cycles';
     is $out, "no cycles\n", 'output';
+
+    ($out, $status) = module_cycles('--', "-I$lib", "$lib/Cyc/Main.pm");
+    is $status, 2, 'exit status 2: compile failed';
+    like $out, qr{^reload: Cyc::Main \(\S+/Cyc/Main\.pm\) is compiled a second time; it was compiled as the main program\n  Cyc::Main \(main program\)\n    -> Cyc::Gate  \(parent at \S+ line 9\)\n}m,
+        'reload explained';
+    like $out, qr{^  Cyc::Main was compiled up to \S+/Cyc/Main\.pm line 9 at that point$}m,
+        'where the main program stood';
+    unlike $out, qr/Cyc::Hub requires Cyc::Hub/, 'no self edge';
 
     ($out, $status) = module_cycles('--', "-I$lib", '-e', 'use Deps::Broken');
     is $status, 2, 'exit status 2 on a compile error';

@@ -20,11 +20,15 @@
 //!     tracing before loading the code to inspect.
 //!   - `PL_ppaddr` is process-global; events are kept per OS thread.
 //!   - `do FILE` is not traced.
+//!   - The file a `load` will read is found by searching `@INC` again
+//!     (`@INC` hooks are skipped), and a reload is detected by comparing
+//!     canonical paths with `$0` and the other `%INC` values.
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use libperl_rs::{Cop, Perl, Sv};
+use libperl_rs::{Av, Cop, Hv, Perl, Sv, SvKind};
 use libperl_sys as sys;
 use libperl_sys::{OP, PerlInterpreter, thx};
 
@@ -44,6 +48,13 @@ pub struct RequireEvent {
     pub status: &'static str,
     /// Files being loaded at that moment, outermost first
     pub stack: Vec<String>,
+    /// For `load`: the file that will be read, found by searching `@INC`
+    /// the way perl does (plain directory entries only)
+    pub path: Option<String>,
+    /// For `load`: the file at `path` has been compiled already, as the
+    /// main program (`$0`) or under this other `%INC` key — loading it
+    /// again compiles the same code twice
+    pub reload_of: Option<String>,
 }
 
 thread_local! {
@@ -171,6 +182,13 @@ unsafe fn record(my_perl: *mut PerlInterpreter) {
                 "cached"
             }
         };
+        let (path, reload_of) = if status == "load" {
+            let path = resolve_path(&perl, &name);
+            let reload_of = path.as_deref().and_then(|p| compiled_as(&perl, &name, p));
+            (path, reload_of)
+        } else {
+            (None, None)
+        };
         let cop = Cop::from_raw(sys::PL_curcop!(my_perl));
         let ev = RequireEvent {
             module: inspect_core::passes::deps::module_of_file(&name),
@@ -179,6 +197,8 @@ unsafe fn record(my_perl: *mut PerlInterpreter) {
             from_line: cop.map(|c| c.line()).unwrap_or(0),
             status,
             stack,
+            path,
+            reload_of,
         };
         EVENTS.with(|e| e.borrow_mut().push(ev));
     }
@@ -218,4 +238,62 @@ fn loading_stack(perl: &Perl) -> Vec<String> {
         }
     }
     out
+}
+
+/// The file `require` will read for `name`: `name` itself when it is an
+/// absolute or `./` / `../` path, otherwise the first `@INC` directory
+/// holding it. `@INC` hooks (references) are skipped.
+fn resolve_path(perl: &Perl, name: &str) -> Option<String> {
+    let explicit =
+        Path::new(name).is_absolute() || name.starts_with("./") || name.starts_with("../");
+    if explicit {
+        return Path::new(name).is_file().then(|| name.to_string());
+    }
+    let inc = unsafe { thx::Perl_get_av(perl.as_ptr(), c"INC".as_ptr(), 0) };
+    if inc.is_null() {
+        return None;
+    }
+    let inc = unsafe { Av::from_raw_unchecked(inc) };
+    for sv in inc.iter(perl).flatten() {
+        let SvKind::Scalar(sv) = sv.kind() else {
+            continue;
+        };
+        let dir = String::from_utf8_lossy(sv.pv(perl)).into_owned();
+        let candidate = Path::new(&dir).join(name);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+/// Whether the file at `path` was compiled already: as the main program
+/// (returns `$0`) or under another `%INC` key (returns that key).
+/// Files are compared by canonical path.
+fn compiled_as(perl: &Perl, name: &str, path: &str) -> Option<String> {
+    let target = std::fs::canonicalize(path).ok()?;
+    let same = |p: &str| std::fs::canonicalize(p).is_ok_and(|c| c == target);
+    if let Some(sv0) = perl.get_sv("0", 0) {
+        let prog = String::from_utf8_lossy(sv0.pv(perl)).into_owned();
+        if same(&prog) {
+            return Some(prog);
+        }
+    }
+    let inc = unsafe { thx::Perl_get_hv(perl.as_ptr(), c"INC".as_ptr(), 0) };
+    if inc.is_null() {
+        return None;
+    }
+    let inc = unsafe { Hv::from_raw_unchecked(inc) };
+    for (key, val) in inc.iter(perl) {
+        let SvKind::Scalar(val) = val.kind() else {
+            continue;
+        };
+        if key == name.as_bytes() || unsafe { thx::SvOK(perl.as_ptr(), val.as_ptr()) } == 0 {
+            continue;
+        }
+        if same(&String::from_utf8_lossy(val.pv(perl))) {
+            return Some(String::from_utf8_lossy(key).into_owned());
+        }
+    }
+    None
 }

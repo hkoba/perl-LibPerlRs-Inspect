@@ -12,19 +12,26 @@
 # as the output of `perl -MLibPerlRs::Inspect::Deps=deps.json -c ...`
 # instead.
 #
-# Each cycle (strongly connected component of the dependency graph) is
-# printed with the edges inside it. An edge marked "!! still compiling"
-# was followed while its target had not finished compiling: code in the
-# requiring module that runs at that point (import, BEGIN, a use of the
-# target's subs or @ISA) sees the target only partly defined. Those are
-# the cycles that usually matter.
+# First the requires that usually cause trouble are explained, each with
+# the chain of loads that led to it and the line where the target's own
+# compilation was suspended:
+#   - "reload": a file compiled a second time: typically a module given
+#     as the main program and reached again through a cycle (it is not in
+#     %INC under its module name), or one file loaded under two names.
+#     Subs are redefined, and anything that cannot run twice breaks.
+#   - "still compiling": a require of a module whose compilation has not
+#     finished. Code in the requiring module that runs at that point
+#     (import, BEGIN, a use of the target's subs or @ISA) sees the target
+#     only partly defined.
+# Then each cycle (strongly connected component of the dependency graph)
+# is printed with the edges inside it; the edges above are marked "!!".
 #
 # Edges: use / no / require that ran, use parent / base. With --static,
 # also the constant `require`s inside subs (lazy loading, which is a
 # common way to break a cycle, so they are left out by default).
 # --prefix keeps only modules whose file starts with one of the given
-# directories (plus the main program). Exit status is 1 when a cycle is
-# found, 2 when the program failed to compile (the error is printed and
+# directories (plus the main program). Exit status is 1 when a cycle or a
+# reload is found, 2 when the program failed to compile (the error is printed and
 # the dependencies seen until then are still analyzed).
 use strict;
 use warnings;
@@ -50,7 +57,7 @@ my $keep  = sub {
     my ($id) = @_;
     return 1 unless @prefixes;
     my $n = $nodes->{$id} or return 0;
-    return 1 unless defined $n->{inc};    # the main program
+    return 1 if $n->{program} || !defined $n->{inc};
     my $file = $n->{file} // return 0;
     grep { index($file, $_) == 0 } @prefixes;
 };
@@ -65,10 +72,17 @@ for my $e (@{ $deps->{edges} }) {
     push @{ $edges_of{ $e->{from} } }, $e;
 }
 
+my @flagged = grep {
+    $_->{from} ne $_->{to}    # e.g. a package inheriting from another of its file
+        && (defined $_->{reload_of} || ($_->{status} // '') eq 'in_progress')
+        && $keep->($_->{from}) && $keep->($_->{to})
+} @{ $deps->{edges} };
+explain($_) for @flagged;
+
 my @cycles = grep { @$_ > 1 } tarjan_scc(\%succ);
 if (!@cycles) {
     print "no cycles\n";
-    exit($failed ? 2 : 0);
+    exit($failed ? 2 : @flagged ? 1 : 0);
 }
 
 my $n = 0;
@@ -77,13 +91,48 @@ for my $scc (@cycles) {
     printf "cycle %d: %s\n", ++$n, join ', ', sort @$scc;
     for my $from (sort @$scc) {
         for my $e (grep { $in{ $_->{to} } } @{ $edges_of{$from} || [] }) {
-            printf "  %s -> %s  (%s at %s line %d)%s\n",
-                $from, $e->{to}, $e->{kind}, $e->{file}, $e->{line},
-                ($e->{status} // '') eq 'in_progress' ? "  !! still compiling" : '';
+            printf "  %s -> %s  (%s)%s\n", $from, $e->{to}, where($e), mark($e);
         }
     }
 }
 exit($failed ? 2 : 1);
+
+sub where {
+    my ($e) = @_;
+    "$e->{kind} at $e->{file} line $e->{line}";
+}
+
+sub mark {
+    my ($e) = @_;
+    defined $e->{reload_of}                 ? '  !! reload'
+    : ($e->{status} // '') eq 'in_progress' ? '  !! still compiling'
+    :                                         '';
+}
+
+# A flagged edge with the chain of loads that led to it
+sub explain {
+    my ($e) = @_;
+    my $target = $nodes->{ $e->{to} } || {};
+    if (defined $e->{reload_of}) {
+        my $how = $e->{reload_of} eq ($deps->{program} // '')
+            ? 'as the main program'
+            : "as $e->{reload_of}";
+        printf "reload: %s (%s) is compiled a second time; it was compiled %s\n",
+            $e->{to}, $target->{file} // $e->{inc}, $how;
+    } else {
+        printf "still compiling: %s requires %s (%s)\n", $e->{from}, $e->{to}, where($e);
+    }
+    my @chain = LibPerlRs::Inspect::Deps->chain($deps, $e);
+    my $root  = $chain[0]{from};
+    printf "  %s%s\n", $root, $nodes->{$root}{program} ? ' (main program)' : '';
+    printf "    -> %s  (%s)%s\n", $_->{to}, where($_), mark($_) for @chain;
+    # where the target's own compilation stood
+    my ($paused) = grep { $_->{from} eq $e->{to} } @chain;
+    printf "  %s was compiled up to %s line %d at that point\n",
+        $e->{to}, $paused->{file}, $paused->{line}
+        if $paused;
+    print "\n";
+}
 
 # Tarjan's strongly connected components; iterative, so that long
 # dependency chains do not hit deep recursion.

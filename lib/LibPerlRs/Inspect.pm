@@ -139,6 +139,8 @@ Arrayref of the recorded requires, in the order they ran:
         from_line => 4,
         status    => 'load',            # see below
         stack     => ['My/App.pm'],     # files being loaded, outermost first
+        path      => 'lib/My/Util.pm',  # load only: the file to be read
+        reload_of => 'bin/app.pl',      # load only, see below
     }
 
 C<status> is C<load> (not yet loaded: loading starts), C<cached> (already
@@ -146,6 +148,14 @@ loaded, nothing happens), C<in_progress> (in C<%INC> but still being
 loaded: the require closes a compile-time dependency cycle, and the target
 module is only partly defined at this point) or C<failed> (an earlier load
 failed). C<require VERSION> is not recorded, nor is C<do FILE>.
+
+For a C<load>, C<path> is the file perl will read, found by searching
+C<@INC> again (C<@INC> hooks are skipped). C<reload_of> is set when that
+file has been compiled already: to C<$0> when it is the main program (a
+module compiled as the main program is not in C<%INC> under its module
+name, so a dependency cycle leading back to it compiles it a second
+time), or to the other C<%INC> key it was loaded under. Files are
+compared by canonical path.
 
 =item packages()
 

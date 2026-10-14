@@ -50,6 +50,21 @@ subtest 'run time' => sub {
         'a failed load';
 };
 
+subtest 'path and reload_of' => sub {
+    LibPerlRs::Inspect::require_trace_start();
+    # the same file under two %INC keys: Cyc/Router.pm is reached again
+    # through the cycle Router -> Main -> Gate -> Hub -> Router
+    eval q{ require "./t/lib-deps/Cyc/Router.pm"; 1 } or die $@;
+    my @ev = grep { $_->{status} eq 'load' } @{ LibPerlRs::Inspect::require_events() };
+    my ($first) = grep { $_->{name} eq './t/lib-deps/Cyc/Router.pm' } @ev;
+    is $first->{path}, './t/lib-deps/Cyc/Router.pm', 'explicit path';
+    ok !exists $first->{reload_of}, 'first load';
+    my ($gate) = grep { $_->{name} eq 'Cyc/Gate.pm' } @ev;
+    like $gate->{path}, qr{lib-deps/Cyc/Gate\.pm\z}, 'path found in @INC';
+    my ($again) = grep { $_->{name} eq 'Cyc/Router.pm' } @ev;
+    is $again->{reload_of}, './t/lib-deps/Cyc/Router.pm', 'reload of the other key';
+};
+
 subtest 'stop' => sub {
     LibPerlRs::Inspect::require_trace_start();
     LibPerlRs::Inspect::require_trace_stop();
