@@ -117,6 +117,10 @@ t/golden/5.44-threaded/shift_style.json
 t/golden/5.44-threaded/signature.json
 t/golden/5.44-threaded/ternary.json
 t/golden/5.44-threaded/unpack_args.json
+t/lib-deps/Cyc/Gate.pm
+t/lib-deps/Cyc/Hub.pm
+t/lib-deps/Cyc/Main.pm
+t/lib-deps/Cyc/Router.pm
 t/lib-deps/Deps/A.pm
 t/lib-deps/Deps/B.pm
 t/lib-deps/Deps/Broken.pm

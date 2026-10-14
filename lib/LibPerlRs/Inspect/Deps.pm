@@ -22,7 +22,10 @@ sub import {
 CHECK {
     if (defined $_out) {
         __PACKAGE__->stop;
-        __PACKAGE__->write_json($_out, __PACKAGE__->collect);
+        # also runs after a failed compilation: write what was seen so far
+        my $data = eval { __PACKAGE__->collect }
+            || { nodes => {}, edges => [], collect_error => "$@" };
+        __PACKAGE__->write_json($_out, $data);
     }
 }
 
@@ -123,13 +126,17 @@ sub collect {
         for my $name (sort keys %$stash) {
             next if $name =~ /::\z/;
             my $code = *{"${pkg}::$name"}{CODE} or next;
+            # declared only (`use subs`, `sub foo;`, or left undefined by
+            # a failed compile): no op tree
+            next unless defined &$code;
             my $cv = B::svref_2object($code);
             next if $cv->XSUB;
             my $file = $cv->FILE;
             next unless defined $file && $traced{$file};
             # imported subs are listed under their own package
             next unless $cv->GV->STASH->NAME eq $pkg;
-            for my $site (@{ LibPerlRs::Inspect::require_sites($code) }) {
+            my $sites = eval { LibPerlRs::Inspect::require_sites($code) } or next;
+            for my $site (@$sites) {
                 next unless defined $site->{file};
                 push @edges, {
                     from => $node_of_file->($file),
@@ -168,7 +175,9 @@ sub read_json {
 
 # Collect the dependencies of a program in a child perl:
 #   run_perl('-Ilib', 'bin/app.pl')  /  run_perl('-Ilib', '-e', 'use My::App')
-# Only compiles it (perl -c). Returns the decoded data.
+# Only compiles it (perl -c). Returns the decoded data; when compilation
+# fails, the data collected up to that point with the child's STDERR in
+# `compile_error`.
 sub run_perl {
     my ($class, @args) = @_;
     require File::Temp;
@@ -184,11 +193,13 @@ sub run_perl {
     open STDERR, '>&', $err or die "Can't redirect STDERR: $!";
     my $rc = system @cmd;
     open STDERR, '>&', $saved or die "Can't restore STDERR: $!";
-    if ($rc != 0) {
-        seek $err, 0, 0;
-        die "perl -c failed:\n", do { local $/; <$err> };
-    }
-    $class->read_json("$tmp");
+    return $class->read_json("$tmp") if $rc == 0;
+    seek $err, 0, 0;
+    my $msg = do { local $/; <$err> };
+    die "perl -c failed:\n$msg" unless -s "$tmp";
+    my $data = $class->read_json("$tmp");
+    $data->{compile_error} = $msg;
+    $data;
 }
 
 1;
@@ -244,6 +255,11 @@ The result of C<collect> is:
             ...
         ],
     }
+
+When compilation fails, the data seen up to that point is still written
+(CHECK blocks run after a failed compilation too). C<run_perl> adds the
+child's error output as C<compile_error>; C<collect_error> is set when
+collecting itself failed.
 
 A node is named after its package for a C<*.pm> file, after its C<%INC>
 key for other loaded files, and after its path for the main program.

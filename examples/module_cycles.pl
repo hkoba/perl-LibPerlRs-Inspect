@@ -24,7 +24,8 @@
 # common way to break a cycle, so they are left out by default).
 # --prefix keeps only modules whose file starts with one of the given
 # directories (plus the main program). Exit status is 1 when a cycle is
-# found.
+# found, 2 when the program failed to compile (the error is printed and
+# the dependencies seen until then are still analyzed).
 use strict;
 use warnings;
 use Getopt::Long qw(:config require_order);
@@ -37,6 +38,12 @@ GetOptions('static' => \my $static, 'prefix=s' => \my @prefixes)
 my $deps = (@ARGV == 1 && $ARGV[0] =~ /\.json\z/)
     ? LibPerlRs::Inspect::Deps->read_json($ARGV[0])
     : LibPerlRs::Inspect::Deps->run_perl(@ARGV);
+
+my $failed = defined $deps->{compile_error};
+if ($failed) {
+    (my $msg = $deps->{compile_error}) =~ s/^/  /mg;
+    print "compile failed:\n$msg\n";
+}
 
 my $nodes = $deps->{nodes};
 my $keep  = sub {
@@ -61,7 +68,7 @@ for my $e (@{ $deps->{edges} }) {
 my @cycles = grep { @$_ > 1 } tarjan_scc(\%succ);
 if (!@cycles) {
     print "no cycles\n";
-    exit 0;
+    exit($failed ? 2 : 0);
 }
 
 my $n = 0;
@@ -76,7 +83,7 @@ for my $scc (@cycles) {
         }
     }
 }
-exit 1;
+exit($failed ? 2 : 1);
 
 # Tarjan's strongly connected components; iterative, so that long
 # dependency chains do not hit deep recursion.
