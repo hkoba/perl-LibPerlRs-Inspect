@@ -167,6 +167,13 @@ sub collect {
         }
     }
 
+    # a load that did not complete (the file failed to compile, or the
+    # compilation was aborted while it was in progress)
+    for my $e (@edges) {
+        next unless ($e->{status} // '') eq 'load';
+        $e->{failed} = 1 unless defined $INC{ $e->{inc} };
+    }
+
     # what a partly compiled target was missing when it was required
     _compare_snapshot($_) for grep { $_->{snapshot} } @edges;
 
@@ -305,6 +312,38 @@ sub read_json {
     JSON::PP->new->decode(do { local $/; <$fh> });
 }
 
+# When the program in perl arguments (as for run_perl) is a *.pm file
+# under one of the -I directories, the module name it has there: such a
+# module compiled as the main program can be loaded a second time.
+sub program_module {
+    my ($class, @args) = @_;
+    my (@dirs, $program);
+    while (@args) {
+        my $arg = shift @args;
+        if ($arg eq '--') {
+            $program = shift @args;
+            last;
+        } elsif ($arg =~ /^-I(.*)\z/s) {
+            push @dirs, length $1 ? $1 : shift @args;
+        } elsif ($arg =~ /^-[eE]/) {
+            return undef;
+        } elsif ($arg !~ /^-/) {
+            $program = $arg;
+            last;
+        }
+    }
+    return undef unless defined $program && $program =~ /\.pm\z/;
+    require File::Spec;
+    my $abs = File::Spec->rel2abs($program);
+    for my $dir (@dirs) {
+        my $rel = File::Spec->abs2rel($abs, File::Spec->rel2abs($dir));
+        next if $rel =~ m{^\.\.} || File::Spec->file_name_is_absolute($rel);
+        my $module = _module_of(join '/', File::Spec->splitdir($rel)) or next;
+        return $module;
+    }
+    undef;
+}
+
 # Collect the dependencies of a program in a child perl:
 #   run_perl('-Ilib', 'bin/app.pl')  /  run_perl('-Ilib', '-e', 'use My::App')
 # Only compiles it (perl -c). Returns the decoded data; when compilation
@@ -405,6 +444,14 @@ Exporter-style or no C<import>, C<missing>: the requested names that were
 not exportable yet (for a C<use> without arguments, the C<@EXPORT> names
 added later, i.e. what it silently failed to import). C<use> edges carry
 the import C<args>.
+
+A C<load> edge whose file did not finish loading (it failed to compile,
+or the compilation was aborted while it was in progress) has C<failed>.
+
+C<< LibPerlRs::Inspect::Deps->program_module(@perl_args) >> returns the
+module name of the program in C<run_perl>-style arguments when it is a
+F<*.pm> file under one of the C<-I> directories (undef otherwise): such a
+module compiled as the main program can be loaded a second time.
 
 C<< LibPerlRs::Inspect::Deps->chain($deps, $edge) >> returns how the
 target of an edge with a C<stack> came to be required: the edges that

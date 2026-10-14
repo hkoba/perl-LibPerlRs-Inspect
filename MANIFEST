@@ -35,6 +35,7 @@ crates/inspect-report/tests/api.rs
 crates/inspect-xs/Cargo.toml
 crates/inspect-xs/build.rs
 crates/inspect-xs/src/lib.rs
+examples/load_tree.pl
 examples/module_cycles.pl
 examples/module_graph.pl
 examples/truth_table.pl

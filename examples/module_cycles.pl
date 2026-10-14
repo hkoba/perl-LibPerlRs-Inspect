@@ -3,6 +3,7 @@
 #
 #   perl -Mblib examples/module_cycles.pl [--static] [--prefix=DIR]... -- PERL-ARGS...
 #   perl -Mblib examples/module_cycles.pl [--static] [--prefix=DIR]... deps.json
+#   perl -Mblib examples/module_cycles.pl --module=NAME [-- PERL-ARGS...]
 #
 #   perl -Mblib examples/module_cycles.pl --prefix=lib -- -Ilib bin/app.pl
 #   perl -Mblib examples/module_cycles.pl -- -It/lib-deps -e 'use Deps::A'
@@ -10,7 +11,10 @@
 # PERL-ARGS are compiled (perl -c) in a child perl with
 # LibPerlRs::Inspect::Deps loaded first; a single *.json argument is read
 # as the output of `perl -MLibPerlRs::Inspect::Deps=deps.json -c ...`
-# instead.
+# instead. --module=NAME is a shorthand for `-- -e 'use NAME'`, followed
+# by further perl arguments such as -I. When the program given is a *.pm
+# file under one of the -I directories, a note suggests --module: a
+# module compiled as the main program can be loaded a second time.
 #
 # First the requires that usually cause trouble are explained, each with
 # the chain of loads that led to it and the line where the target's own
@@ -41,13 +45,22 @@ use warnings;
 use Getopt::Long qw(:config require_order);
 use LibPerlRs::Inspect::Deps;
 
-GetOptions('static' => \my $static, 'prefix=s' => \my @prefixes)
+GetOptions('static' => \my $static, 'prefix=s' => \my @prefixes, 'module=s' => \my $module)
     or die "bad options\n";
-@ARGV or die "usage: $0 [--static] [--prefix=DIR]... (-- PERL-ARGS... | deps.json)\n";
+@ARGV = ('--', @ARGV, '-e', "use $module") if defined $module;
+@ARGV or die "usage: $0 [--static] [--prefix=DIR]... [--module=NAME] (-- PERL-ARGS... | deps.json)\n";
 
-my $deps = (@ARGV == 1 && $ARGV[0] =~ /\.json\z/)
-    ? LibPerlRs::Inspect::Deps->read_json($ARGV[0])
-    : LibPerlRs::Inspect::Deps->run_perl(@ARGV);
+my $deps;
+if (@ARGV == 1 && $ARGV[0] =~ /\.json\z/) {
+    $deps = LibPerlRs::Inspect::Deps->read_json($ARGV[0]);
+} else {
+    shift @ARGV if $ARGV[0] eq '--';
+    if (my $m = LibPerlRs::Inspect::Deps->program_module(@ARGV)) {
+        warn "note: the program is the module $m; compiled as the main program it can\n"
+            . "be loaded a second time. Try --module=$m to load it as a module.\n";
+    }
+    $deps = LibPerlRs::Inspect::Deps->run_perl(@ARGV);
+}
 
 my $failed = defined $deps->{compile_error};
 if ($failed) {

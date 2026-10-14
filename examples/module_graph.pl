@@ -4,7 +4,7 @@
 #   perl -Mblib examples/module_graph.pl [--static] [--prefix=DIR]... -- PERL-ARGS... | dot -Tsvg > deps.svg
 #   perl -Mblib examples/module_graph.pl [--static] [--prefix=DIR]... deps.json
 #
-# Arguments as for examples/module_cycles.pl. Edge styles: solid = use,
+# Arguments (including --module=NAME) as for examples/module_cycles.pl. Edge styles: solid = use,
 # dashed = require that ran, bold = use parent / base, dotted =
 # require inside a sub (--static); red = followed while the target was
 # still compiling.
@@ -13,13 +13,14 @@ use warnings;
 use Getopt::Long qw(:config require_order);
 use LibPerlRs::Inspect::Deps;
 
-GetOptions('static' => \my $static, 'prefix=s' => \my @prefixes)
+GetOptions('static' => \my $static, 'prefix=s' => \my @prefixes, 'module=s' => \my $module)
     or die "bad options\n";
-@ARGV or die "usage: $0 [--static] [--prefix=DIR]... (-- PERL-ARGS... | deps.json)\n";
+@ARGV = ('--', @ARGV, '-e', "use $module") if defined $module;
+@ARGV or die "usage: $0 [--static] [--prefix=DIR]... [--module=NAME] (-- PERL-ARGS... | deps.json)\n";
 
 my $deps = (@ARGV == 1 && $ARGV[0] =~ /\.json\z/)
     ? LibPerlRs::Inspect::Deps->read_json($ARGV[0])
-    : LibPerlRs::Inspect::Deps->run_perl(@ARGV);
+    : LibPerlRs::Inspect::Deps->run_perl($ARGV[0] eq '--' ? @ARGV[1 .. $#ARGV] : @ARGV);
 
 my $nodes = $deps->{nodes};
 my $keep  = sub {

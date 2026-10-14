@@ -91,15 +91,26 @@ subtest 'what a module still compiling was missing' => sub {
     is_deeply $e->{missing}, ['helper'], 'not exportable at that moment';
 };
 
-# (output, exit status) of examples/module_cycles.pl
-sub module_cycles {
-    my @cmd = ($^X, (map { "-I$_" } grep { !ref } @INC),
-        "$examples/module_cycles.pl", @_);
+subtest 'program_module' => sub {
+    my $pm = sub { LibPerlRs::Inspect::Deps->program_module(@_) };
+    is $pm->("-I$lib", "$lib/Cyc/Main.pm"), 'Cyc::Main', '-Idir';
+    is $pm->('-I', $lib, "$lib/Cyc/Main.pm"), 'Cyc::Main', '-I dir';
+    is $pm->("-I$lib", '-e', 'use Cyc::Main'), undef, '-e';
+    is $pm->("-I$lib/Cyc", "$lib/Cyc/Main.pm"), 'Main', 'innermost -I';
+    is $pm->("-I$lib/Imp", "$lib/Cyc/Main.pm"), undef, 'outside of -I';
+    is $pm->("-I$lib", 'bin/app.pl'), undef, 'not a .pm';
+};
+
+# (output, exit status) of an example script; STDERR is kept apart
+sub example {
+    my ($script, @args) = @_;
+    my @cmd = ($^X, (map { "-I$_" } grep { !ref } @INC), "$examples/$script", @args);
     open my $fh, '-|', @cmd or die "Can't run @cmd: $!";
     my $out = do { local $/; <$fh> };
     close $fh;
     ($out, $? >> 8);
 }
+sub module_cycles { example('module_cycles.pl', @_) }
 
 subtest 'examples/module_cycles.pl' => sub {
     my ($out, $status) = module_cycles('--', "-I$lib", '-e', 'use Deps::A');
@@ -127,6 +138,29 @@ subtest 'examples/module_cycles.pl' => sub {
     ($out, $status) = module_cycles('--', "-I$lib", '-e', 'use Deps::Broken');
     is $status, 2, 'exit status 2 on a compile error';
     like $out, qr/^compile failed:\n  Deps::Broken refuses to load/, 'error printed';
+};
+
+subtest 'examples/load_tree.pl' => sub {
+    my ($out, $status) = example('load_tree.pl', '--', "-I$lib", "$lib/Cyc/Main.pm");
+    is $status, 2, 'exit status 2 on a compile error';
+    my ($tree) = $out =~ /\n(Cyc::Main\n.*)/s;
+    $tree =~ s{\Q$lib/\E}{}g;
+    is $tree, <<'END', 'tree';
+Cyc::Main
+  use base  (Cyc/Main.pm line 9)
+  parent Cyc::Gate  (Cyc/Main.pm line 9)  !! failed
+    use subs  (Cyc/Gate.pm line 3)
+    use Cyc::Hub  (Cyc/Gate.pm line 4)  !! failed
+      parent Cyc::Hub  (Cyc/Hub.pm line 8)  (same file)
+      require Cyc::Router  (Cyc/Hub.pm line 3)  !! failed
+        use Cyc::Main  (Cyc/Router.pm line 3)  !! reload, failed
+END
+
+    ($out, $status) = example('load_tree.pl', "--prefix=$lib", '--module=Cyc::Main', '--', "-I$lib");
+    is $status, 0, 'loads as a module';
+    like $out, qr/^-e\n  use Cyc::Main  \(-e line 1\)\n    parent Cyc::Gate /, '--module';
+    unlike $out, qr/use (?:base|subs)/, '--prefix hides modules outside';
+    like $out, qr/^          use Cyc::Main  \(\S+ line 3\)  !! still compiling$/m, 'cycle';
 };
 
 done_testing;

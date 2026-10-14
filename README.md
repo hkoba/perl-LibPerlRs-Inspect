@@ -187,9 +187,32 @@ still compiling: Imp::Listener requires Imp::Quiet (use at t/lib-deps/Imp/Listen
   !! `use Imp::Quiet` imported nothing: @EXPORT was still empty (later: shout)
 ```
 
+`examples/load_tree.pl` prints the loads as a tree, indented under the
+file being compiled at each moment, marking failed loads, reloads and
+requires of a module still compiling:
+
+```console
+$ perl -Mblib examples/load_tree.pl -- -It/lib-deps t/lib-deps/Cyc/Main.pm
+note: the program is the module Cyc::Main; compiled as the main program it can
+be loaded a second time. Try --module=Cyc::Main to load it as a module.
+compile failed:
+  ...
+
+Cyc::Main
+  use base  (t/lib-deps/Cyc/Main.pm line 9)
+  parent Cyc::Gate  (t/lib-deps/Cyc/Main.pm line 9)  !! failed
+    use subs  (t/lib-deps/Cyc/Gate.pm line 3)
+    use Cyc::Hub  (t/lib-deps/Cyc/Gate.pm line 4)  !! failed
+      parent Cyc::Hub  (t/lib-deps/Cyc/Hub.pm line 8)  (same file)
+      require Cyc::Router  (t/lib-deps/Cyc/Hub.pm line 3)  !! failed
+        use Cyc::Main  (t/lib-deps/Cyc/Router.pm line 3)  !! reload, failed
+```
+
 `examples/module_graph.pl` prints the graph in Graphviz DOT format.
-Both take `--prefix=DIR` to keep only the modules under a directory and
-`--static` to include the `require`s inside subs.
+All three take `--prefix=DIR` to keep only the modules under a directory
+and `--module=NAME` to load a module (`-e 'use NAME'`) rather than
+compile a file; `module_cycles.pl` and `module_graph.pl` take `--static`
+to include the `require`s inside subs.
 
 Known limits: `#line` directives change the file a dependency is
 attributed to; code compiled by string eval, `require $var` and `use if`
