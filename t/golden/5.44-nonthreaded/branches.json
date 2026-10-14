@@ -8,7 +8,12 @@
       {
          "flags" : 0,
          "ix" : 1,
-         "name" : "$v"
+         "line" : 1,
+         "name" : "$v",
+         "scope" : [
+            1,
+            1
+         ]
       }
    ],
    "proto" : null,

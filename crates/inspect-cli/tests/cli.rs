@@ -120,3 +120,142 @@ fn deep_report() {
     assert!(add["report"].get("returns").is_some());
     assert!(add["report"].get("logic").is_some());
 }
+
+const ISA_SCRIPT: &str = "\
+package Base; sub new { bless {}, shift }
+package Mid; use parent -norequire, 'Base';
+package Other; sub other {}
+package Child; use mro 'c3'; use parent -norequire, 'Mid', 'Other';
+package Runtime; our @ISA = ('Base');
+";
+
+#[test]
+fn package_inheritance() {
+    let v = run(&["-e", ISA_SCRIPT]);
+    let pkgs = &v["packages"];
+
+    // a package with @ISA but no subs is still listed (empty subs)
+    let mid = &pkgs["Mid"];
+    assert_eq!(mid["subs"], serde_json::json!({}));
+    assert_eq!(mid["isa"], serde_json::json!(["Base"]));
+    assert_eq!(mid["linear_isa"], serde_json::json!(["Mid", "Base"]));
+    assert_eq!(mid["mro"], "dfs");
+
+    // declaration order for isa, C3 order (self first) for linear_isa
+    let child = &pkgs["Child"];
+    assert_eq!(child["isa"], serde_json::json!(["Mid", "Other"]));
+    assert_eq!(
+        child["linear_isa"],
+        serde_json::json!(["Child", "Mid", "Base", "Other"])
+    );
+    assert_eq!(child["mro"], "c3");
+
+    // no @ISA -> no inheritance fields
+    assert!(pkgs["Base"].get("isa").is_none());
+    assert!(pkgs["Base"].get("linear_isa").is_none());
+
+    // a top-level `our @ISA = (...)` of the compiled file is a runtime
+    // assignment and is not seen (the main body never runs)
+    assert!(pkgs.get("Runtime").is_none());
+}
+
+const LEXICALS_SCRIPT: &str = "\
+use v5.36;
+package Foo; sub new { bless {}, shift }
+package Bar;
+my $outer = 1;
+sub run ($self, $n = 2) {
+    my Foo $obj = Foo->new;
+    our $pkgvar;
+    state $count = 0;
+    for my $i (1..$n) {
+        $count += $i + $outer;
+    }
+    return $obj;
+}
+";
+
+#[test]
+fn sub_lexicals() {
+    let v = run(&["-e", LEXICALS_SCRIPT]);
+    let lex = v["packages"]["Bar"]["subs"]["run"]["lexicals"]
+        .as_array()
+        .expect("lexicals array");
+    let by_name = |name: &str| {
+        lex.iter()
+            .find(|e| e["name"] == name)
+            .unwrap_or_else(|| panic!("{name} not in {lex:?}"))
+    };
+
+    // signature parameters: declared on the sub line, visible to the body
+    assert_eq!(by_name("$self")["decl"], "my");
+    assert_eq!(by_name("$self")["line"], 5);
+    assert_eq!(by_name("$n")["scope"], serde_json::json!([5, 12]));
+
+    // `my Foo $obj`: declared type; visible from the next statement on
+    let obj = by_name("$obj");
+    assert_eq!(obj["type"], "Foo");
+    assert_eq!(obj["line"], 6);
+    assert_eq!(obj["scope"], serde_json::json!([7, 12]));
+
+    assert_eq!(by_name("$pkgvar")["decl"], "our");
+    assert_eq!(by_name("$pkgvar")["package"], "Bar");
+    assert_eq!(by_name("$count")["decl"], "state");
+
+    // loop variable: scoped to the loop body
+    let i = by_name("$i");
+    assert_eq!(i["line"], 9);
+    assert_eq!(i["scope"], serde_json::json!([10, 10]));
+
+    // closure capture: marked outer, no lines
+    let outer = by_name("$outer");
+    assert_eq!(outer["outer"], true);
+    assert!(outer.get("line").is_none());
+
+    // sigil-only internal slots are not listed
+    assert!(
+        lex.iter()
+            .all(|e| e["name"].as_str().is_some_and(|n| n.len() > 1))
+    );
+}
+
+#[test]
+fn analyze_prefix() {
+    // a throwaway "workspace" with one module under lib/
+    let ws = std::env::temp_dir().join(format!("perl-inspect-prefix-{}", std::process::id()));
+    let lib = ws.join("lib").join("My");
+    std::fs::create_dir_all(&lib).expect("mkdir");
+    std::fs::write(
+        lib.join("Util.pm"),
+        "package My::Util;\nsub add {\n    my ($x, $y) = @_;\n    return $x + $y;\n}\n1;\n",
+    )
+    .expect("write module");
+    let inc = format!("-I{}", ws.join("lib").display());
+    let prefix = format!("--analyze-prefix={}", ws.join("lib").display());
+    let script = "use My::Util; sub here { 1 }";
+
+    // default: subs of other files are not analyzed
+    let v = run(&[&inc, "-e", script]);
+    let add = &v["packages"]["My::Util"]["subs"]["add"];
+    assert_eq!(add["provenance"], "imported");
+    assert!(add.get("args").is_none());
+    assert!(add.get("lexicals").is_none());
+
+    // with the prefix: analyzed like a file sub, provenance unchanged
+    let v = run(&[&prefix, &inc, "-e", script]);
+    let _ = std::fs::remove_dir_all(&ws);
+    let add = &v["packages"]["My::Util"]["subs"]["add"];
+    assert_eq!(add["provenance"], "imported");
+    assert_eq!(add["lines"], serde_json::json!([3, 4]));
+    assert_eq!(add["args"]["max_arity"], 2);
+    assert_eq!(add["lexicals"][0]["name"], "$x");
+    // subs outside the prefix (core modules) stay unanalyzed
+    let others_analyzed = v["packages"]
+        .as_object()
+        .expect("packages")
+        .iter()
+        .filter(|(pkg, _)| *pkg != "My::Util")
+        .flat_map(|(_, p)| p["subs"].as_object().expect("subs").values())
+        .any(|s| s["provenance"] == "imported" && s.get("args").is_some());
+    assert!(!others_analyzed);
+}

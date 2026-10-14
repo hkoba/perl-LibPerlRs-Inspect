@@ -128,7 +128,14 @@ types / lints). The report also reconstructs the file's own `use`
 statements **with their import arguments** (`uses`, via BEGIN capture +
 `B::Deparse::begin_is_use` — the technique shared with
 `LibPerlRs::PartialEval`'s `compile_info`), plus the line numbers of
-opaque `BEGIN` blocks (`opaque_begins`).
+opaque `BEGIN` blocks (`opaque_begins`). Packages with a non-empty
+`@ISA` carry `isa`, `linear_isa` (MRO order) and `mro`, and are listed
+even when they define no subs; a top-level runtime `our @ISA = (...)` in
+the compiled file itself is not seen, since its main body never runs.
+Each analyzed sub also lists its `lexicals` (name, declarator, `my Foo
+$x` type, declaring line and visible line range). `--analyze-prefix=PATH`
+(repeatable) also analyzes subs defined in other files under PATH, e.g.
+`perl-inspect -Ilib --analyze-prefix=lib/ script.pl`.
 
 ```console
 $ cargo build -p inspect-cli --release

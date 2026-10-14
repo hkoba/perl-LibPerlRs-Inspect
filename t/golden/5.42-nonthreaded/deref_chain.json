@@ -8,12 +8,22 @@
       {
          "flags" : 0,
          "ix" : 1,
-         "name" : "$x"
+         "line" : 1,
+         "name" : "$x",
+         "scope" : [
+            1,
+            1
+         ]
       },
       {
          "flags" : 0,
          "ix" : 2,
-         "name" : "$i"
+         "line" : 1,
+         "name" : "$i",
+         "scope" : [
+            1,
+            1
+         ]
       }
    ],
    "proto" : null,

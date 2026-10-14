@@ -7,9 +7,30 @@
 //!   - stash walk + **provenance tags** (file / imported / xs)
 //!   - file / line range / prototype per CV
 //!   - argspec of file-defined subs (or, with [`ReportOpts::deep`], the
-//!     full analysis report: args / returns / logic / types / lints)
+//!     full analysis report: args / returns / logic / types / lints); with
+//!     [`ReportOpts::analyze_prefixes`] also of subs from other files under
+//!     the given path prefixes (e.g. the workspace's `lib/`)
 //!   - the target file's own `use` statements (`uses`) and opaque `BEGIN`
 //!     blocks (`opaque_begins`)
+//!   - `lexicals` of each analyzed sub: name, `pad_ix`, `decl`
+//!     (my / state / our / field), declared `type` (`my Foo $x`), the
+//!     `package` of an `our`, the declaring `line` and the `scope` line
+//!     range of the statements that can see it (from the pad name's COP
+//!     sequence range); closure captures are `outer` without lines
+//!   - per-package inheritance for packages with a non-empty `@ISA`:
+//!     `isa` (declaration order), `linear_isa` (MRO order, the package
+//!     itself first) and `mro` (`dfs` / `c3`). Such a package is listed
+//!     even when it has no subs (`"subs": {}`). `@ISA` is read as it
+//!     stands after compilation: assignments in modules loaded via
+//!     `use`/`require` (which execute) and in BEGIN (`use parent`) are
+//!     seen, but a top-level runtime assignment in the compiled file
+//!     itself (`our @ISA = (...)`) is not, since its main body never runs.
+//!
+//! # Schema compatibility
+//!
+//! The JSON stays at `schema_version` 1 while it only grows: new keys are
+//! optional and existing ones keep their meaning. Detect newer features
+//! by the presence of their keys.
 //!
 //! # Calling sequence
 //!
@@ -43,6 +64,8 @@
 
 use std::collections::BTreeMap;
 
+mod packages;
+
 use libperl_rs::{Perl, StashWalker, SubEntry};
 use serde_json::{Map, Value, json};
 
@@ -59,6 +82,13 @@ pub struct ReportOpts {
     /// Embed the full analysis report (args / returns / logic / types /
     /// lints) in each file-defined sub instead of argspec alone.
     pub deep: bool,
+    /// Also analyze (lines / args or report / lexicals) the subs defined
+    /// in other files whose path (CvFILE) starts with one of these
+    /// prefixes — e.g. the workspace's `lib/`. Plain string prefix match:
+    /// pass them in the form perl loads the files, i.e. matching the `-I`
+    /// paths. Such subs keep their `imported` provenance. Empty (the
+    /// default) analyzes only the compiled file's own subs.
+    pub analyze_prefixes: Vec<String>,
 }
 
 /// Prepare a fresh interpreter for [`report`]. Must be called **before**
@@ -90,15 +120,36 @@ pub fn report(perl: &Perl, main_file: &str, opts: &ReportOpts) -> Value {
     let mut pkgs: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
     let mut walker = StashWalker::new(perl);
     walker.walk("main", &mut |e| {
-        let entry = sub_entry(perl, e, main_file, opts.deep);
+        let entry = sub_entry(perl, e, main_file, opts);
         pkgs.entry(e.package.clone())
             .or_default()
             .insert(e.name.clone(), entry);
     });
 
+    // Inheritance (U5). Done before file_begins as well: B::Deparse would
+    // add its own packages. A package with @ISA but no subs still gets an
+    // entry (with empty "subs").
+    let mut inheritance: BTreeMap<String, packages::Inheritance> = BTreeMap::new();
+    for pkg in packages::package_names(perl) {
+        if let Some(inh) = packages::inheritance(perl, &pkg) {
+            inheritance.insert(pkg, inh);
+        }
+    }
+    for pkg in inheritance.keys() {
+        pkgs.entry(pkg.clone()).or_default();
+    }
+
     let packages: BTreeMap<String, Value> = pkgs
         .into_iter()
-        .map(|(pkg, subs)| (pkg, json!({ "subs": subs })))
+        .map(|(pkg, subs)| {
+            let mut entry = json!({ "subs": subs });
+            if let Some(inh) = inheritance.remove(&pkg) {
+                entry["isa"] = json!(inh.isa);
+                entry["linear_isa"] = json!(inh.linear_isa);
+                entry["mro"] = json!(inh.mro);
+            }
+            (pkg, entry)
+        })
         .collect();
 
     // use extraction is done **after** the stash walk: requiring B::Deparse
@@ -145,8 +196,10 @@ pub fn report(perl: &Perl, main_file: &str, opts: &ReportOpts) -> Value {
 ///
 /// Provenance tag: XSUB → "xs", CvFILE equal to the target file → "file",
 /// anything else (imported from another module / defined in another file)
-/// → "imported".
-fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
+/// → "imported". "file" subs, and "imported" ones under
+/// `opts.analyze_prefixes`, are analyzed (lines / args or report /
+/// lexicals).
+fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> Value {
     let cv = e.cv;
     let file = cv.file();
     let provenance = if cv.is_xsub() {
@@ -173,13 +226,21 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
         }
     }
 
-    if provenance == "file" {
+    let analyze = provenance == "file"
+        || (provenance == "imported"
+            && file.as_deref().is_some_and(|f| {
+                opts.analyze_prefixes
+                    .iter()
+                    .any(|p| !p.is_empty() && f.starts_with(p.as_str()))
+            }));
+    if analyze {
         match inspect_capture::capture_sub(perl, cv) {
             Ok(ir) => {
                 if let Some((lo, hi)) = ir.lines {
                     m.insert("lines".into(), json!([lo, hi]));
                 }
-                if deep {
+                m.insert("lexicals".into(), lexicals(&ir));
+                if opts.deep {
                     let report = inspect_core::passes::analyze(&ir);
                     m.insert(
                         "report".into(),
@@ -199,4 +260,51 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, deep: bool) -> Value {
         }
     }
     Value::Object(m)
+}
+
+/// The named pad entries of a sub (U2): name, pad index, declarator,
+/// declared type (`my Foo $x`), declaring line and the line range of the
+/// statements that can see it. Variables captured from an enclosing sub
+/// are marked `outer` and carry no lines. Sigil-only names (`$`) are
+/// internal slots (state-var once flags, loop iterators, signature
+/// placeholders) and are left out.
+fn lexicals(ir: &inspect_core::ir::SubIr) -> Value {
+    use inspect_core::ir::padname_flags;
+    let entries: Vec<Value> = ir
+        .pad
+        .iter()
+        .filter(|p| p.name.as_deref().is_some_and(|n| n.len() > 1))
+        .map(|p| {
+            let decl = if p.our_stash.is_some() {
+                "our"
+            } else if p.flags & padname_flags::FIELD != 0 {
+                "field"
+            } else if p.flags & padname_flags::STATE != 0 {
+                "state"
+            } else {
+                "my"
+            };
+            let mut e = Map::new();
+            e.insert("name".into(), json!(p.name));
+            e.insert("pad_ix".into(), json!(p.ix));
+            e.insert("decl".into(), json!(decl));
+            if let Some(t) = &p.typ {
+                e.insert("type".into(), json!(t));
+            }
+            if let Some(pkg) = &p.our_stash {
+                e.insert("package".into(), json!(pkg));
+            }
+            if p.flags & padname_flags::OUTER != 0 {
+                e.insert("outer".into(), json!(true));
+            }
+            if let Some(l) = p.line {
+                e.insert("line".into(), json!(l));
+            }
+            if let Some((lo, hi)) = p.scope {
+                e.insert("scope".into(), json!([lo, hi]));
+            }
+            Value::Object(e)
+        })
+        .collect();
+    Value::Array(entries)
 }

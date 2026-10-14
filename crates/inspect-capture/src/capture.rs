@@ -8,7 +8,9 @@ use std::collections::HashMap;
 
 #[cfg(perlapi_ver44)]
 use inspect_core::ir::NamedParam;
-use inspect_core::ir::{DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit};
+use inspect_core::ir::{
+    DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit, padname_flags,
+};
 use libperl_rs::{Cop, Cv, Gv, Op, Perl};
 use libperl_sys::{OPclass, OPf_KIDS, PerlInterpreter, methop, op, padop, sv, svop, svtype};
 
@@ -44,11 +46,12 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
         raws: Vec::new(),
         min_line: u32::MAX,
         max_line: 0,
+        cops: Vec::new(),
     };
     let mut root_node = cap.walk(root);
     cap.resolve(&mut root_node);
 
-    Ok(SubIr {
+    let mut ir = SubIr {
         file,
         lines: if cap.max_line > 0 && cap.min_line <= cap.max_line {
             Some((cap.min_line, cap.max_line))
@@ -56,10 +59,17 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
             None
         },
         proto,
-        pad: capture_pad(cv),
+        pad: capture_pad(cv, &cap.cops),
         start_id: cap.lookup(cv.start()),
         root: root_node,
-    })
+    };
+    let intro = ir.intro_lines();
+    for p in &mut ir.pad {
+        if let Some(line) = intro.get(&(p.ix as u64)) {
+            p.line = Some(*line);
+        }
+    }
+    Ok(ir)
 }
 
 /// Raw pointers kept for pass 2 (pushed onto raws in the same order as ids)
@@ -78,6 +88,8 @@ struct Capturer {
     raws: Vec<RawLinks>,
     min_line: u32,
     max_line: u32,
+    /// (cop_seq, line) of every COP in the sub, for placing pad names
+    cops: Vec<(u32, u32)>,
 }
 
 impl Capturer {
@@ -153,6 +165,8 @@ impl Capturer {
                 let c = unsafe { Cop::from_raw_unchecked(o as *const libperl_sys::COP) };
                 let line = c.line();
                 let file = c.file();
+                let seq = unsafe { (*c.as_ptr()).cop_seq };
+                self.cops.push((seq, line));
                 if line > 0 {
                     self.min_line = self.min_line.min(line);
                     self.max_line = self.max_line.max(line);
@@ -599,7 +613,7 @@ fn sv_lit(sv: *const sv) -> SvLit {
 }
 
 /// Collect named pad entries (table of targ → name / declared type)
-fn capture_pad(cv: Cv) -> Vec<PadEntry> {
+fn capture_pad(cv: Cv, cops: &[(u32, u32)]) -> Vec<PadEntry> {
     let mut out = Vec::new();
     for (ix, slot) in cv.pad_names().enumerate() {
         let Some(pn) = slot else { continue };
@@ -607,12 +621,55 @@ fn capture_pad(cv: Cv) -> Vec<PadEntry> {
         if name.as_deref().is_none_or(str::is_empty) {
             continue; // unnamed slots (temporaries / consts) are not listed
         }
+        let flags = PadnameFLAGS(pn.as_ptr());
+        let (line, scope) = if flags & padname_flags::OUTER != 0 {
+            // captured from an enclosing sub: low/high hold the parent pad
+            // index and fake-lexical flags, not a COP sequence range
+            (None, None)
+        } else {
+            let p = pn.as_ptr();
+            pad_lines(unsafe { (*p).xpadn_low }, unsafe { (*p).xpadn_high }, cops)
+        };
         out.push(PadEntry {
             ix: ix as u32,
             name,
             typ: pn.type_stash_name(),
-            flags: PadnameFLAGS(pn.as_ptr()),
+            flags,
+            our_stash: our_stash_name(pn.as_ptr()),
+            line,
+            scope,
         });
     }
     out
+}
+
+/// Package of an `our` pad name (PadnameOURSTASH), None for my/state
+fn our_stash_name(pn: *mut libperl_sys::PADNAME) -> Option<String> {
+    let hv = unsafe { libperl_sys::PadnameOURSTASH(pn) };
+    if hv.is_null() {
+        None
+    } else {
+        unsafe { libperl_rs::Hv::from_raw_unchecked(hv) }.name()
+    }
+}
+
+/// Place a pad name in the source from its COP sequence range. Per pad.c
+/// the name is valid for cop_seq in low+1 ..= high, so `scope` spans the
+/// lines of those COPs. The declaring statement's own COP has
+/// cop_seq == low (intro_my hands its seq to the COP it is building), as
+/// may earlier statements with no declaration in between; the latest
+/// line among them is a fallback for the declaring line, which
+/// `SubIr::intro_lines` (from the declaring op) overrides where it can.
+fn pad_lines(low: u32, high: u32, cops: &[(u32, u32)]) -> (Option<u32>, Option<(u32, u32)>) {
+    let line = cops
+        .iter()
+        .filter(|(seq, _)| *seq == low)
+        .map(|(_, line)| *line)
+        .max();
+    let visible = cops
+        .iter()
+        .filter(|(seq, _)| low < *seq && *seq <= high)
+        .map(|(_, line)| *line);
+    let scope = visible.clone().min().zip(visible.max());
+    (line, scope)
 }
