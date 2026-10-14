@@ -22,8 +22,9 @@
 //!     variables). Taken from the main CV when the file is the main
 //!     program, otherwise from the pad kept when a `require` compiled it
 //!     after [`prepare`] (e.g. `-e 'BEGIN { require $ARGV[0] }' -- FILE`,
-//!     or a `require` run after parse). When it cannot be obtained the key
-//!     is left out and `file_lexicals_error` says why
+//!     or a `require` run after parse; see [`FileLexicals`] to limit
+//!     this to the target file). When it cannot be obtained the key is
+//!     left out and `file_lexicals_error` says why
 //!   - `home` of a sub that was named somewhere other than where it is
 //!     listed: `{"package", "name"}` of the glob it was defined through
 //!     (`CvGV`; for a `CvNAMED` sub its name and `CvSTASH`), e.g.
@@ -74,6 +75,35 @@
 //! `Perl::run` is never needed (and should not be called): the trust model
 //! is the same as `perl -c`.
 //!
+//! To compile a file as a module (`require`d rather than run as the main
+//! program), name it in [`prepare_with`], so that only its top level is
+//! kept for `file_lexicals` and the other required files are left alone;
+//! a script needs [`FileLexicals::MainProgram`] only:
+//!
+//! ```no_run
+//! use inspect_report::{FileLexicals, PrepareOpts};
+//! use libperl_rs::Perl;
+//!
+//! let file = "/ws/lib/Foo.pm".to_string();
+//! let args: Vec<String> = ["perl", "-I/ws/lib", "-e", "BEGIN { require $ARGV[0] }", "--", &file]
+//!     .map(String::from)
+//!     .into();
+//! let envp: Vec<String> = std::env::vars().map(|(k, v)| format!("{k}={v}")).collect();
+//!
+//! let mut perl = Perl::new();
+//! let mut opts = PrepareOpts::default();
+//! opts.file_lexicals = FileLexicals::Files(vec![file.clone()]);
+//! inspect_report::prepare_with(&perl, &opts);
+//! if perl.parse(&args, &envp) == 0 {
+//!     // the target is the required file, not $0 ("-e")
+//!     let json = inspect_report::report(&perl, &file, &Default::default());
+//!     println!("{json}");
+//! }
+//! ```
+//!
+//! An interpreter that loads its target after parse (e.g. with `eval_pv`)
+//! names it with [`want_file_lexicals`] before compiling that `require`.
+//!
 //! [`report`] is **one-shot**: it requires `B::Deparse` inside the
 //! interpreter, which pollutes the symbol table. Use a throwaway
 //! interpreter (e.g. one per forked child) for each report.
@@ -106,18 +136,71 @@ pub struct ReportOpts {
     pub analyze_prefixes: Vec<String>,
 }
 
+/// Options for [`prepare_with`].
+///
+/// Construct with `PrepareOpts::default()` and set fields; new fields may
+/// be added in the future.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct PrepareOpts {
+    /// Which files compiled by `require` keep their top-level pad for
+    /// `file_lexicals`.
+    pub file_lexicals: FileLexicals,
+}
+
+/// Where `file_lexicals` can come from, besides the main program (whose
+/// top level is always available).
+///
+/// Keeping a required file's pad means copying its top-level op tree
+/// when `require` has compiled it. [`FileLexicals::Files`] does that only
+/// for the files named, and is the recommended choice for a file
+/// compiled as a module.
+#[derive(Debug, Clone, Default)]
+pub enum FileLexicals {
+    /// Every file `require` compiles (what [`prepare`] does)
+    #[default]
+    AllRequired,
+    /// Only these files, given as the path `require` gets (its `%INC`
+    /// value), e.g. FILE for `-e 'BEGIN { require $ARGV[0] }' -- FILE`
+    Files(Vec<String>),
+    /// No required file: the main program only, e.g. for a script, or an
+    /// interpreter whose target is chosen after parse (see
+    /// [`want_file_lexicals`]). No `require` hook is installed.
+    MainProgram,
+}
+
+/// Prepare a fresh interpreter for [`report`]: [`prepare_with`] with the
+/// default options, which keep the top-level pad of every required file.
+/// Must be called **before** `Perl::parse`.
+pub fn prepare(perl: &Perl) {
+    prepare_with(perl, &PrepareOpts::default());
+}
+
 /// Prepare a fresh interpreter for [`report`]. Must be called **before**
 /// `Perl::parse`.
 ///
 /// Enables BEGIN capture (`PL_savebegin`) so that the BEGIN CVs run during
 /// parse are saved into `PL_beginav_save`; without it `uses` and
-/// `opaque_begins` come out empty. Also starts keeping the top-level pad
-/// of each file `require` compiles (process-wide, by wrapping
-/// `PL_ppaddr[OP_REQUIRE]`), for `file_lexicals` of a file compiled as a
-/// module.
-pub fn prepare(perl: &Perl) {
+/// `opaque_begins` come out empty. Unless `opts.file_lexicals` is
+/// [`FileLexicals::MainProgram`], also starts keeping the top-level pad
+/// of required files (process-wide, by wrapping `PL_ppaddr[OP_REQUIRE]`)
+/// for `file_lexicals` of a file compiled as a module.
+pub fn prepare_with(perl: &Perl, opts: &PrepareOpts) {
     inspect_capture::enable_begin_capture(perl);
-    inspect_capture::filescope::enable();
+    match &opts.file_lexicals {
+        FileLexicals::AllRequired => inspect_capture::filescope::enable(),
+        FileLexicals::Files(files) => files.iter().for_each(|f| want_file_lexicals(f)),
+        FileLexicals::MainProgram => {}
+    }
+}
+
+/// Keep the top-level pad of `file` for `file_lexicals` when a `require`
+/// compiled from now on loads it — also after `Perl::parse`, e.g. in an
+/// interpreter prepared with [`FileLexicals::MainProgram`] before it
+/// runs `require FILE` with `eval_pv`. `file` is the path as `require`
+/// gets it (its `%INC` value).
+pub fn want_file_lexicals(file: &str) {
+    inspect_capture::filescope::want(file);
 }
 
 /// The main file as perl sees it (`$0`): the script path, or `"-e"`.

@@ -33,8 +33,11 @@ crates/inspect-report/Cargo.toml
 crates/inspect-report/build.rs
 crates/inspect-report/src/lib.rs
 crates/inspect-report/tests/api.rs
+crates/inspect-report/tests/common/mod.rs
 crates/inspect-report/tests/file_lexicals.rs
+crates/inspect-report/tests/file_lexicals_late.rs
 crates/inspect-report/tests/file_lexicals_module.rs
+crates/inspect-report/tests/file_lexicals_targeted.rs
 crates/inspect-report/tests/home.rs
 crates/inspect-xs/Cargo.toml
 crates/inspect-xs/build.rs

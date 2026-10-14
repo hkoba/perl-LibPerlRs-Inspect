@@ -65,8 +65,12 @@ fn main() -> ExitCode {
     let envp: Vec<String> = env::vars().map(|(k, v)| format!("{k}={v}")).collect();
 
     let mut perl = Perl::new();
-    // Must precede parse: keeps the BEGINs run during parse for `uses`
-    inspect_report::prepare(&perl);
+    // Must precede parse: keeps the BEGINs run during parse for `uses`.
+    // The report is of the main program ($0), whose file_lexicals need no
+    // require hook.
+    let mut prep = inspect_report::PrepareOpts::default();
+    prep.file_lexicals = inspect_report::FileLexicals::MainProgram;
+    inspect_report::prepare_with(&perl, &prep);
     let rc = perl.parse(&perl_args, &envp);
     if rc != 0 {
         // perl itself has already printed the compile error body to stderr
