@@ -24,6 +24,15 @@
 //!     after [`prepare`] (e.g. `-e 'BEGIN { require $ARGV[0] }' -- FILE`,
 //!     or a `require` run after parse). When it cannot be obtained the key
 //!     is left out and `file_lexicals_error` says why
+//!   - `home` of a sub that was named somewhere other than where it is
+//!     listed: `{"package", "name"}` of the glob it was defined through
+//!     (`CvGV`; for a `CvNAMED` sub its name and `CvSTASH`), e.g.
+//!     `{"package": "Carp", "name": "confess"}` for an imported
+//!     `confess`, or the original name for a glob alias. An anonymous
+//!     sub assigned to a glob has `"name": "__ANON__", "anon": true`.
+//!     Left out when it equals the listed package and name — so subs
+//!     defined in their own package, including generated ones such as
+//!     accessors, have none — and when it cannot be read. XSUBs too
 //!   - per-package inheritance for packages with a non-empty `@ISA`:
 //!     `isa` (declaration order), `linear_isa` (MRO order, the package
 //!     itself first) and `mro` (`dfs` / `c3`). Such a package is listed
@@ -248,6 +257,17 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> V
     }
     if let Some(p) = cv.proto() {
         m.insert("prototype".into(), json!(p));
+    }
+    // Where the sub was named (U7), when it is not where it is listed:
+    // an import, a glob alias, or an anonymous sub assigned to a glob
+    if let Some(h) = packages::cv_home(cv)
+        && (h.package != e.package || h.name != e.name)
+    {
+        let mut home = json!({ "package": h.package, "name": h.name });
+        if h.anon {
+            home["anon"] = json!(true);
+        }
+        m.insert("home".into(), home);
     }
     // Where the glob was created (a clue for tracking imports). Note that
     // simple subs are stored in the stash as RV→CV and have no glob (gv: None).

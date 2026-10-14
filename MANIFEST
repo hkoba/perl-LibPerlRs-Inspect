@@ -35,6 +35,7 @@ crates/inspect-report/src/lib.rs
 crates/inspect-report/tests/api.rs
 crates/inspect-report/tests/file_lexicals.rs
 crates/inspect-report/tests/file_lexicals_module.rs
+crates/inspect-report/tests/home.rs
 crates/inspect-xs/Cargo.toml
 crates/inspect-xs/build.rs
 crates/inspect-xs/src/lib.rs
