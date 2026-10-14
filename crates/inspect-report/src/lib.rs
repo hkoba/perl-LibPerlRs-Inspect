@@ -17,6 +17,13 @@
 //!     `package` of an `our`, the declaring `line` and the `scope` line
 //!     range of the statements that can see it (from the pad name's COP
 //!     sequence range); closure captures are `outer` without lines
+//!   - `file_lexicals`: the same for the top level of the compiled file
+//!     (`my $config`, `my Foo $obj`, `our $VERSION`, block and loop
+//!     variables). Taken from the main CV when the file is the main
+//!     program, otherwise from the pad kept when a `require` compiled it
+//!     after [`prepare`] (e.g. `-e 'BEGIN { require $ARGV[0] }' -- FILE`,
+//!     or a `require` run after parse). When it cannot be obtained the key
+//!     is left out and `file_lexicals_error` says why
 //!   - per-package inheritance for packages with a non-empty `@ISA`:
 //!     `isa` (declaration order), `linear_isa` (MRO order, the package
 //!     itself first) and `mro` (`dfs` / `c3`). Such a package is listed
@@ -95,9 +102,13 @@ pub struct ReportOpts {
 ///
 /// Enables BEGIN capture (`PL_savebegin`) so that the BEGIN CVs run during
 /// parse are saved into `PL_beginav_save`; without it `uses` and
-/// `opaque_begins` come out empty.
+/// `opaque_begins` come out empty. Also starts keeping the top-level pad
+/// of each file `require` compiles (process-wide, by wrapping
+/// `PL_ppaddr[OP_REQUIRE]`), for `file_lexicals` of a file compiled as a
+/// module.
 pub fn prepare(perl: &Perl) {
     inspect_capture::enable_begin_capture(perl);
+    inspect_capture::filescope::enable();
 }
 
 /// The main file as perl sees it (`$0`): the script path, or `"-e"`.
@@ -188,7 +199,28 @@ pub fn report(perl: &Perl, main_file: &str, opts: &ReportOpts) -> Value {
     if let Some(e) = uses_error {
         out["uses_error"] = json!(e);
     }
+    match file_lexicals(perl, main_file) {
+        Ok(lex) => out["file_lexicals"] = lex,
+        Err(e) => out["file_lexicals_error"] = json!(e),
+    }
     out
+}
+
+/// Top-level lexicals of `main_file` (U6): from the main CV when it is
+/// the main program (`$0`), otherwise from the pad kept when `require`
+/// compiled it (see [`prepare`]).
+fn file_lexicals(perl: &Perl, main_file: &str) -> Result<Value, String> {
+    if self::main_file(perl).as_deref() == Some(main_file) {
+        return inspect_capture::capture_main(perl).map(|ir| lexicals(&ir.pad));
+    }
+    inspect_capture::filescope::file_pad(main_file)
+        .map(|pad| lexicals(&pad))
+        .ok_or_else(|| {
+            format!(
+                "the top level of {main_file} was not seen compiled: it is not the main program, \
+                 and no require compiled it after prepare()"
+            )
+        })
 }
 
 /// Build the report entry for a single sub.
@@ -238,7 +270,7 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> V
                 if let Some((lo, hi)) = ir.lines {
                     m.insert("lines".into(), json!([lo, hi]));
                 }
-                m.insert("lexicals".into(), lexicals(&ir));
+                m.insert("lexicals".into(), lexicals(&ir.pad));
                 if opts.deep {
                     let report = inspect_core::passes::analyze(&ir);
                     m.insert(
@@ -267,10 +299,9 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> V
 /// are marked `outer` and carry no lines. Sigil-only names (`$`) are
 /// internal slots (state-var once flags, loop iterators, signature
 /// placeholders) and are left out.
-fn lexicals(ir: &inspect_core::ir::SubIr) -> Value {
+fn lexicals(pad: &[inspect_core::ir::PadEntry]) -> Value {
     use inspect_core::ir::padname_flags;
-    let entries: Vec<Value> = ir
-        .pad
+    let entries: Vec<Value> = pad
         .iter()
         .filter(|p| p.name.as_deref().is_some_and(|n| n.len() > 1))
         .map(|p| {

@@ -36,9 +36,31 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
     if root.is_null() {
         return Err("subroutine has no op tree".into());
     }
-    let file = cv.file();
-    let proto = cv.proto();
+    Ok(capture_tree(perl, cv, root, cv.start()))
+}
 
+/// Copy the main program's top level into a SubIr: the pad of
+/// `PL_main_cv` with the op tree under `PL_main_root` (the main CV keeps
+/// its ops there, not in CvROOT). Call after `perl_parse`.
+pub fn capture_main(perl: &Perl) -> Result<SubIr, String> {
+    let my_perl = perl.as_ptr();
+    let cv = Cv::from_raw(libperl_sys::PL_main_cv!(my_perl))
+        .ok_or_else(|| "no main CV (not parsed?)".to_string())?;
+    let root = libperl_sys::PL_main_root!(my_perl);
+    if root.is_null() {
+        return Err("the main program has no op tree".into());
+    }
+    Ok(capture_tree(
+        perl,
+        cv,
+        root,
+        libperl_sys::PL_main_start!(my_perl),
+    ))
+}
+
+/// Capture the tree under `root` (executed from `start`), resolving pad
+/// references through `cv`'s padlist
+pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> SubIr {
     let mut cap = Capturer {
         my_perl: perl.as_ptr(),
         cv,
@@ -52,15 +74,15 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
     cap.resolve(&mut root_node);
 
     let mut ir = SubIr {
-        file,
+        file: cv.file(),
         lines: if cap.max_line > 0 && cap.min_line <= cap.max_line {
             Some((cap.min_line, cap.max_line))
         } else {
             None
         },
-        proto,
+        proto: cv.proto(),
         pad: capture_pad(cv, &cap.cops),
-        start_id: cap.lookup(cv.start()),
+        start_id: cap.lookup(start),
         root: root_node,
     };
     let intro = ir.intro_lines();
@@ -69,7 +91,7 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
             p.line = Some(*line);
         }
     }
-    Ok(ir)
+    ir
 }
 
 /// Raw pointers kept for pass 2 (pushed onto raws in the same order as ids)
