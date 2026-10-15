@@ -99,6 +99,19 @@ fn slot_addr(p: sys::Perl_ppaddr_t) -> usize {
 /// Starting again while already tracing only clears the events.
 pub fn start() {
     EVENTS.with(|e| e.borrow_mut().clear());
+    install();
+    ACTIVE.store(true, Ordering::Relaxed);
+}
+
+/// Stop tracing. The events are kept. Ops compiled while tracing keep
+/// calling the wrapper, which then passes straight through.
+pub fn stop() {
+    ACTIVE.store(false, Ordering::Relaxed);
+    uninstall_if_unused();
+}
+
+/// Put the wrapper into `PL_ppaddr[OP_REQUIRE]` (unless it is there)
+pub(crate) fn install() {
     unsafe {
         let slot = &raw mut sys::PL_ppaddr[sys::opcode::OP_REQUIRE as usize];
         let installed = INSTALLED.load(Ordering::Relaxed);
@@ -112,13 +125,14 @@ pub fn start() {
             INSTALLED.store(slot_addr(wrapper), Ordering::Relaxed);
         }
     }
-    ACTIVE.store(true, Ordering::Relaxed);
 }
 
-/// Stop tracing. The events are kept. Ops compiled while tracing keep
-/// calling the wrapper, which then passes straight through.
-pub fn stop() {
-    ACTIVE.store(false, Ordering::Relaxed);
+/// Restore the original pp function when neither tracing nor
+/// [`filescope`](crate::filescope) capture needs the wrapper
+fn uninstall_if_unused() {
+    if ACTIVE.load(Ordering::Relaxed) || crate::filescope::enabled() {
+        return;
+    }
     unsafe {
         let slot = &raw mut sys::PL_ppaddr[sys::opcode::OP_REQUIRE as usize];
         // leave the slot alone if someone else replaced the wrapper since
@@ -136,28 +150,52 @@ pub fn events() -> Vec<RequireEvent> {
 #[cfg(perl_useithreads)]
 unsafe extern "C" fn traced_require(my_perl: *mut PerlInterpreter) -> *mut OP {
     unsafe {
-        if ACTIVE.load(Ordering::Relaxed) {
-            let _ = std::panic::catch_unwind(|| record(my_perl));
-        }
         // ORIG is set before the wrapper is ever installed
         let Some(orig) = ORIG else {
             std::process::abort()
         };
-        orig(my_perl)
+        around_require(my_perl, || orig(my_perl))
     }
 }
 
 #[cfg(not(perl_useithreads))]
 unsafe extern "C" fn traced_require() -> *mut OP {
     unsafe {
-        if ACTIVE.load(Ordering::Relaxed) {
-            let _ = std::panic::catch_unwind(|| record(std::ptr::null_mut()));
-        }
         // ORIG is set before the wrapper is ever installed
         let Some(orig) = ORIG else {
             std::process::abort()
         };
-        orig()
+        around_require(std::ptr::null_mut(), || orig())
+    }
+}
+
+/// Run the original pp function `orig`: record the event before it,
+/// and let [`filescope`](crate::filescope) see a file it has just
+/// compiled (still unrun) after it
+unsafe fn around_require(my_perl: *mut PerlInterpreter, orig: impl FnOnce() -> *mut OP) -> *mut OP {
+    unsafe {
+        if ACTIVE.load(Ordering::Relaxed) {
+            let _ = std::panic::catch_unwind(|| record(my_perl));
+        }
+        let filescope = crate::filescope::enabled();
+        let cxix = if filescope { cx_index(my_perl) } else { -1 };
+        let next = orig();
+        if filescope {
+            let _ = std::panic::catch_unwind(|| crate::filescope::after_require(my_perl, cxix));
+        }
+        next
+    }
+}
+
+/// `cxstack_ix` of the current stackinfo
+pub(crate) unsafe fn cx_index(my_perl: *mut PerlInterpreter) -> i32 {
+    unsafe {
+        let si = sys::PL_curstackinfo!(my_perl);
+        if si.is_null() {
+            -1
+        } else {
+            (*si).si_cxix
+        }
     }
 }
 

@@ -107,3 +107,53 @@ fn av_strings(perl: &Perl, av: *mut libperl_rs::AV) -> Vec<String> {
         .map(|sv| String::from_utf8_lossy(sv.pv(perl)).into_owned())
         .collect()
 }
+
+/// Where a sub was named: the package and name of the glob it was
+/// defined through (`CvGV`), which an import or a glob alias does not
+/// change.
+pub struct Home {
+    pub package: String,
+    pub name: String,
+    /// `CvANON`: an anonymous sub (`__ANON__`) assigned to a glob
+    pub anon: bool,
+}
+
+/// The [`Home`] of `cv`; None when it has no name or its stash is gone.
+///
+/// A `CvNAMED` sub keeps its name as a HEK and its package in
+/// `CvSTASH`; these are read as they are, since the `CvGV` macro would
+/// create a GV for such a sub (changing the symbol table).
+pub fn cv_home(cv: libperl_rs::Cv) -> Option<Home> {
+    use libperl_sys as sys;
+    unsafe {
+        let body = (*cv.as_ptr()).sv_any as *const sys::XPVCV;
+        if body.is_null() {
+            return None;
+        }
+        let flags = (*body).xcv_flags;
+        let anon = flags & sys::CVf_ANON != 0;
+        let (package, name) = if flags & sys::CVf_NAMED != 0 {
+            let hek = (*body).xcv_gv_u.xcv_hek;
+            let stash = (*body).xcv_stash;
+            if hek.is_null() || stash.is_null() {
+                return None;
+            }
+            let key = std::slice::from_raw_parts(
+                (&raw const (*hek).hek_key) as *const u8,
+                (*hek).hek_len as usize,
+            );
+            (
+                libperl_rs::Hv::from_raw_unchecked(stash).name()?,
+                String::from_utf8_lossy(key).into_owned(),
+            )
+        } else {
+            let gv = libperl_rs::Gv::from_raw((*body).xcv_gv_u.xcv_gv)?;
+            (gv.stash_name()?, gv.name()?)
+        };
+        Some(Home {
+            package,
+            name,
+            anon,
+        })
+    }
+}

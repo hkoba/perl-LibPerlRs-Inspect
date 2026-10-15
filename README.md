@@ -238,7 +238,10 @@ opaque `BEGIN` blocks (`opaque_begins`). Packages with a non-empty
 even when they define no subs; a top-level runtime `our @ISA = (...)` in
 the compiled file itself is not seen, since its main body never runs.
 Each analyzed sub also lists its `lexicals` (name, declarator, `my Foo
-$x` type, declaring line and visible line range). `--analyze-prefix=PATH`
+$x` type, declaring line and visible line range), and `file_lexicals`
+lists those of the file's top level. A sub that was named somewhere
+other than where it is listed (an import, a glob alias) carries its
+`home` package and name. `--analyze-prefix=PATH`
 (repeatable) also analyzes subs defined in other files under PATH, e.g.
 `perl-inspect -Ilib --analyze-prefix=lib/ script.pl`.
 
@@ -257,7 +260,7 @@ same JSON from their own embedded interpreter:
 
 ```rust
 let mut perl = libperl_rs::Perl::new();
-inspect_report::prepare(&perl);                 // before parse: BEGIN capture for `uses`
+inspect_report::prepare(&perl);                 // before parse: BEGIN capture for `uses`, require hook for `file_lexicals`
 if perl.parse(&args, &envp) == 0 {              // compile only, never `run`
     let file = inspect_report::main_file(&perl).unwrap();
     let json = inspect_report::report(&perl, &file, &Default::default());
