@@ -42,6 +42,18 @@ fn analyze_json(my_perl: &Perl, code: Cv) -> Result<String, String> {
     serde_json::to_string(&report).map_err(|e| e.to_string())
 }
 
+/// `LibPerlRs::Inspect::analyze_logic_range_json($coderef, $start, $end)`
+/// — truth table of the statements on source lines `$start..$end` of the
+/// sub, treated as one block (`inspect_core::passes::logic::analyze_logic_range`),
+/// as a JSON string. Dies when no statement touches the range.
+#[xs_sub]
+fn analyze_logic_range_json(my_perl: &Perl, code: Cv, start: IV, end: IV) -> Result<String, String> {
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let (lo, hi) = (u32::try_from(start.max(0)).unwrap_or(u32::MAX), u32::try_from(end.max(0)).unwrap_or(u32::MAX));
+    let r = inspect_core::passes::logic::analyze_logic_range(&ir, lo..=hi).map_err(|e| e.to_string())?;
+    serde_json::to_string(&r).map_err(|e| e.to_string())
+}
+
 /// `LibPerlRs::Inspect::analyze($coderef)` — analysis report as a native
 /// nested hashref (no JSON round-trip on the Perl side).
 #[xs_sub]
@@ -253,6 +265,7 @@ xs_boot! {
         dump_optree,
         analyze_json,
         analyze,
+        analyze_logic_range_json,
         begin_capture,
         begins,
         require_sites,

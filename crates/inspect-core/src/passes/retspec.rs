@@ -76,10 +76,12 @@ pub fn analyze_returns(ir: &SubIr) -> RetSpec {
     // not a return or a control structure, it becomes the return value
     if let Some((line, last)) = super::statements(ir).into_iter().last() {
         let l = last.skip_null();
-        if !matches!(
-            l.name.as_str(),
-            "return" | "leaveloop" | "unstack" | "lineseq"
-        ) {
+        if super::has_implicit_value(ir)
+            && !matches!(
+                l.name.as_str(),
+                "return" | "leaveloop" | "unstack" | "lineseq"
+            )
+        {
             returns.push(RetSite {
                 line,
                 kind: "implicit".into(),

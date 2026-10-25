@@ -23,6 +23,15 @@ sub capture {
     $_json->decode(capture_json($code));
 }
 
+# Truth table of the statements on source lines $start..$end of $code,
+# treated as one block: routes leaving the block at its end are
+# "fallthrough" outcomes. Dies when no statement touches the range.
+sub analyze_logic_range {
+    my ($code, $start, $end) = @_;
+    $end = $start unless defined $end;
+    $_json->decode(analyze_logic_range_json($code, $start, $end));
+}
+
 # analyze() returns a native hashref directly from the XS side (no JSON round trip).
 # Use analyze_json() if you want the JSON string.
 

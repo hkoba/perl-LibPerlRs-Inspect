@@ -115,6 +115,26 @@ guard conditions, single-expression `return`s and the implicit final
 value; assignments, call arguments, `die` messages, loop conditions and
 the `&&=` / `||=` / `//=` family stay opaque.
 
+### Truth table of a line range
+
+`analyze_logic_range($sub, $start, $end)` analyzes just the statements on
+source lines `$start..$end` of the sub, as one block. Besides `return` /
+`die` the block has a `fallthrough` outcome: the routes that reach the
+end of the selected statements, each with the statements it executed.
+Inside a loop body `next` / `last` / `redo` are outcomes as well. The
+range is snapped to whole statements: a range touching a single `if`
+without its header line analyzes the arm it lies in (`in_block_of` is the
+`if`); otherwise the contiguous run of statements it touches is the block.
+The result carries `logic` (as above), the `lines` actually covered,
+`snapped`, `stmt_ids` (node ids in `capture()`) and `tail` (the block ends
+the sub, so its last expression is `implicit` rather than `fallthrough`).
+
+```perl
+my $sub = eval "sub {\n my (\$x, \$y) = \@_;\n return 0 unless \$x;\n log_it();\n ... }";
+my $r = LibPerlRs::Inspect::analyze_logic_range($sub, 3, 4);
+# $r->{logic}{paths}: return 0 when !$x; fallthrough when $x (stmts: log_it())
+```
+
 ## Module dependencies
 
 `LibPerlRs::Inspect` also exposes building blocks for tools that look at

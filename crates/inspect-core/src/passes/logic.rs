@@ -4,10 +4,11 @@
 //! (`if` / `elsif` / `else`, `STMT if COND`, `unless`, the ternary
 //! operator, `//`) and every boolean operator reachable from a decomposed
 //! position contributes *atomic conditions*. Each reachable outcome
-//! (`return`, `die`, `croak` / `confess`, or the implicit final expression)
-//! is recorded together with the conjunction of literals that leads to it.
-//! When the number of atoms is small (at most `MAX_TABLE_CONDS`) a full
-//! truth table over all combinations is produced as well.
+//! (`return`, `die`, `croak` / `confess`, `exit`, or the implicit final
+//! expression) is recorded together with the conjunction of literals that
+//! leads to it. When the number of atoms is small (at most
+//! `MAX_TABLE_CONDS`) a full truth table over all combinations is produced
+//! as well.
 //!
 //! Atom rules:
 //! - operands of `&&` / `||` / `!` and the condition of `?:` are atoms,
@@ -41,25 +42,40 @@
 //! Each path also lists the statements executed on its route before the
 //! outcome (`stmts`), restricted to statements whose execution depends on
 //! at least one atom: statements before the first branch (common to every
-//! route) and statements after a merge back to the unconditional path set
-//! are omitted. Loops are not recorded as statements (their inner branches
-//! still are), and a non-terminating modifier statement (`$n++ if $x;`)
-//! is recorded only on routes emitted inside its own arm.
+//! route) are omitted. The literals of a branch whose arms fall through
+//! are carried past the branch, together with the statements of each arm,
+//! so a later outcome is reported once per arm route; when that
+//! continuation would fan out into more than `MAX_PATH_SET` conjunctions
+//! the branch literals (and the arm statements) are dropped instead.
+//! Loops are not recorded as statements (their inner branches still are);
+//! a loop body may run zero times, so nothing from inside a loop is
+//! carried past it.
+//!
+//! # Ranges
+//!
+//! [`analyze_logic_range`] analyses the statements of a source line range
+//! as one block: the block's own exits (`return`, `die`, …) are outcomes
+//! as usual, and every route that survives its last statement is reported
+//! as a `fallthrough` outcome. Inside a range `next` / `last` / `redo`
+//! terminate a route as well (kinds `next` / `last` / `redo`). The range
+//! is snapped to whole statements of one statement list: when it touches
+//! a single compound statement without its header line and lies inside
+//! one of that statement's arms or bodies, the arm is the block (see
+//! [`RangeLogic::in_block_of`]); otherwise the block is the contiguous
+//! run of statements the range touches.
 //!
 //! Remaining limitations:
 //! - atoms are compared textually; semantic implication such as
 //!   `$v > 10` => `$v > 5` is not considered, so a truth table may contain
 //!   rows that are semantically unreachable;
-//! - after a branch whose arms both fall through, the branch literals are
-//!   dropped (only early-return shapes carry literals forward);
-//! - when the continuation after an early return would fan out into more
-//!   than `MAX_PATH_SET` conjunctions, those literals are dropped as well;
 //! - `die` inside `eval BLOCK` is caught, but its kind is still reported
-//!   as `die`;
+//!   as `die`, and literals from inside the eval are not carried past it;
 //! - loop control conditions are not atoms; only branches in the loop body
 //!   are collected;
 //! - `render` does not track precedence, so an opaque `!($a && $b)` (for
 //!   example as a `die` argument) is displayed as `!$a && $b`.
+
+use std::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
 
@@ -67,12 +83,13 @@ use crate::ir::{OpClass, OpNode, SubIr};
 use crate::render::render;
 
 use super::retspec::{croak_call, return_exprs};
+use super::{Stmt, block_statements, has_implicit_value, line_span, nested_blocks, statements};
 
 /// Above this many atoms no truth table (2^n rows) is generated.
 pub const MAX_TABLE_CONDS: usize = 6;
 
-/// Upper bound on the number of conjunctions carried past an early
-/// return; beyond it the continuation literals are dropped.
+/// Upper bound on the number of conjunctions carried past a branch;
+/// beyond it the branch literals are dropped.
 const MAX_PATH_SET: usize = 1 << MAX_TABLE_CONDS;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,7 +107,8 @@ pub struct LogicSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PathOutcome {
     pub line: Option<u32>,
-    /// return | die | croak | confess | implicit
+    /// return | die | croak | confess | exit | implicit | fallthrough |
+    /// next | last | redo
     pub kind: String,
     pub exprs: Vec<String>,
     /// Conjunction of literals under which this outcome is reached.
@@ -125,15 +143,76 @@ pub struct TableRow {
     pub path: Option<usize>,
 }
 
+/// How a statement list is walked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WalkOpts {
+    /// The list is the tail of a sub: its last expression is the implicit
+    /// return value. Otherwise routes surviving the last statement become
+    /// `fallthrough` outcomes.
+    pub tail: bool,
+    /// `next` / `last` / `redo` terminate a route (as outcomes of that
+    /// kind) instead of being plain statements.
+    pub loop_control_outcomes: bool,
+}
+
+/// Result of [`analyze_logic_range`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RangeLogic {
+    pub logic: LogicSpec,
+    /// Node ids of the statements analysed, in order.
+    pub stmt_ids: Vec<u32>,
+    /// Source lines actually covered by those statements.
+    pub lines: (u32, u32),
+    /// `lines` differs from the requested range.
+    pub snapped: bool,
+    /// When the block is an arm or body of a compound statement, that
+    /// statement's node id.
+    pub in_block_of: Option<u32>,
+    /// The block ends the sub: its last expression was treated as the
+    /// implicit return value instead of a fall-through.
+    pub tail: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RangeError {
+    /// The body has no statements at all.
+    Empty,
+    /// No statement touches the requested lines.
+    NoStatements { lines: (u32, u32) },
+}
+
+impl std::fmt::Display for RangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RangeError::Empty => write!(f, "the body has no statements"),
+            RangeError::NoStatements { lines: (lo, hi) } => {
+                write!(f, "no statement on lines {lo}-{hi}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RangeError {}
+
+/// Logic of the whole sub body.
 pub fn analyze_logic(ir: &SubIr) -> LogicSpec {
+    let opts = WalkOpts {
+        tail: has_implicit_value(ir),
+        loop_control_outcomes: false,
+    };
+    analyze_logic_stmts(ir, &statements(ir), &opts)
+}
+
+/// Logic of an arbitrary statement list of `ir` (see [`WalkOpts`]).
+pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> LogicSpec {
     let mut w = Walker {
         ir,
+        opts: *opts,
         conds: Vec::new(),
         paths: Vec::new(),
-        trace: Vec::new(),
     };
-    let stmts = super::statements(ir);
-    w.walk_block(&stmts, &vec![vec![]], true);
+    w.walk_top(stmts);
     let table = w.build_table();
     LogicSpec {
         conds: w.conds,
@@ -142,15 +221,104 @@ pub fn analyze_logic(ir: &SubIr) -> LogicSpec {
     }
 }
 
-/// A set of pairwise exclusive conjunctions. `vec![vec![]]` means
-/// "unconditionally reachable"; an empty set means "unreachable".
-type PathSet = Vec<Vec<CondLit>>;
+fn intersects(span: Option<(u32, u32)>, lo: u32, hi: u32) -> bool {
+    span.is_some_and(|(a, b)| a <= hi && b >= lo)
+}
+
+fn union(a: Option<(u32, u32)>, b: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    match (a, b) {
+        (Some((a0, a1)), Some((b0, b1))) => Some((a0.min(b0), a1.max(b1))),
+        (x, None) | (None, x) => x,
+    }
+}
+
+/// Logic of the statements on a range of source lines, treated as one
+/// block (see the module documentation, section *Ranges*).
+pub fn analyze_logic_range(
+    ir: &SubIr,
+    lines: RangeInclusive<u32>,
+) -> Result<RangeLogic, RangeError> {
+    let (lo, hi) = (*lines.start(), *lines.end());
+    let mut list: Vec<Stmt<'_>> = statements(ir);
+    if list.is_empty() {
+        return Err(RangeError::Empty);
+    }
+    let mut tail_ctx = has_implicit_value(ir);
+    let mut in_block_of = None;
+    loop {
+        let spans: Vec<Option<(u32, u32)>> = list.iter().map(|(l, n)| line_span(n, *l)).collect();
+        let hits: Vec<usize> = (0..list.len())
+            .filter(|&i| intersects(spans[i], lo, hi))
+            .collect();
+        let (Some(&first), Some(&last)) = (hits.first(), hits.last()) else {
+            return Err(RangeError::NoStatements { lines: (lo, hi) });
+        };
+        if first == last {
+            let (line, node) = list[first];
+            let header_selected = line.is_some_and(|l| lo <= l && l <= hi);
+            if !header_selected {
+                let blocks = nested_blocks(node, line);
+                let mut inter = blocks.iter().filter(|b| {
+                    b.stmts
+                        .iter()
+                        .any(|(l, n)| intersects(line_span(n, *l), lo, hi))
+                });
+                if let (Some(b), None) = (inter.next(), inter.next()) {
+                    tail_ctx = tail_ctx && first + 1 == list.len() && b.role.carries_tail();
+                    in_block_of = Some(node.id);
+                    list = b.stmts.clone();
+                    continue;
+                }
+            }
+        }
+        let sel = &list[first..=last];
+        let tail = tail_ctx && last + 1 == list.len();
+        let span = spans[first..=last]
+            .iter()
+            .fold(None, |acc, s| union(acc, *s))
+            .unwrap_or((lo, hi));
+        let opts = WalkOpts {
+            tail,
+            loop_control_outcomes: true,
+        };
+        let logic = analyze_logic_stmts(ir, sel, &opts);
+        return Ok(RangeLogic {
+            logic,
+            stmt_ids: sel.iter().map(|(_, n)| n.id).collect(),
+            lines: span,
+            snapped: span != (lo, hi),
+            in_block_of,
+            tail,
+        });
+    }
+}
+
+/// One conjunction of a path set together with the statements recorded on
+/// its route.
+#[derive(Debug, Clone, PartialEq)]
+struct Conj {
+    lits: Vec<CondLit>,
+    stmts: Vec<StmtRef>,
+}
+
+/// A set of pairwise exclusive conjunctions. A single empty conjunction
+/// means "unconditionally reachable"; an empty set means "unreachable".
+type PathSet = Vec<Conj>;
+
+fn unconditional() -> PathSet {
+    vec![Conj {
+        lits: Vec::new(),
+        stmts: Vec::new(),
+    }]
+}
 
 /// One short-circuit route through a boolean expression.
 #[derive(Debug, Clone)]
 struct Route {
     /// Complete path condition (incoming literals plus those of the route).
     lits: Vec<CondLit>,
+    /// Statements recorded on the incoming conjunction.
+    stmts: Vec<StmtRef>,
     /// Atom whose truth decides the expression on this route, if one has
     /// been interned (`None` for an opaque `//` left-hand side).
     atom: Option<usize>,
@@ -173,7 +341,8 @@ enum Test {
 enum Flow {
     /// Unchanged path set.
     Continue,
-    /// Some routes terminated; the rest continue with this path set.
+    /// Some routes terminated or changed; the rest continue with this
+    /// path set.
     ContinueWith(PathSet),
     /// Every route ended in return/die (the rest is unreachable).
     Terminates,
@@ -224,44 +393,61 @@ fn value_str(r: &Route) -> String {
     }
 }
 
-fn lits_of(routes: Vec<Route>) -> PathSet {
-    routes.into_iter().map(|r| r.lits).collect()
+fn conjs_of(routes: Vec<Route>) -> PathSet {
+    routes
+        .into_iter()
+        .map(|r| Conj {
+            lits: r.lits,
+            stmts: r.stmts,
+        })
+        .collect()
 }
 
 /// The unconditional path set.
 fn is_unconditional(path: &PathSet) -> bool {
-    path.len() == 1 && path[0].is_empty()
+    path.len() == 1 && path[0].lits.is_empty()
 }
 
 struct Walker<'a> {
     ir: &'a SubIr,
+    opts: WalkOpts,
     conds: Vec<String>,
     paths: Vec<PathOutcome>,
-    /// Statements recorded on the current route (see `PathOutcome::stmts`).
-    trace: Vec<StmtRef>,
 }
 
 impl<'a> Walker<'a> {
-    /// Walk a statement list. Returns whether every route terminated.
-    /// `tail` says whether the list sits in tail position of the sub (or
-    /// of an arm), so that its last expression is an implicit return.
-    fn walk_block(
-        &mut self,
-        stmts: &[(Option<u32>, &'a OpNode)],
-        path: &PathSet,
-        tail: bool,
-    ) -> bool {
+    /// Walk the top-level statement list; routes surviving it become
+    /// `fallthrough` outcomes unless the list is a sub's tail.
+    fn walk_top(&mut self, stmts: &[Stmt<'a>]) {
+        let remaining = self.walk_block(stmts, &unconditional(), self.opts.tail);
+        if self.opts.tail {
+            return;
+        }
+        if let Some(set) = remaining {
+            // Reported at the last line of the block's last statement.
+            let line = stmts
+                .last()
+                .and_then(|(l, n)| line_span(n, *l).map(|(_, hi)| hi).or(*l));
+            self.emit(line, "fallthrough", Vec::new(), &set);
+        }
+    }
+
+    /// Walk a statement list. Returns the path set surviving the last
+    /// statement, or `None` when every route terminated. `tail` says
+    /// whether the list sits in tail position of the sub (or of an arm),
+    /// so that its last expression is an implicit return.
+    fn walk_block(&mut self, stmts: &[Stmt<'a>], path: &PathSet, tail: bool) -> Option<PathSet> {
         if path.is_empty() {
-            return true;
+            return None;
         }
         let mut path = path.clone();
         for (i, (line, node)) in stmts.iter().enumerate() {
             let stmt_tail = tail && i + 1 == stmts.len();
             match self.walk_stmt(*line, node, &path, stmt_tail) {
-                Flow::Terminates => return true,
+                Flow::Terminates => return None,
                 Flow::ContinueWith(set) => {
                     if set.is_empty() {
-                        return true;
+                        return None;
                     }
                     if set.len() <= MAX_PATH_SET {
                         path = set;
@@ -270,7 +456,7 @@ impl<'a> Walker<'a> {
                 Flow::Continue => {}
             }
         }
-        false
+        Some(path)
     }
 
     fn walk_stmt(
@@ -291,29 +477,37 @@ impl<'a> Walker<'a> {
                 self.emit(line, "die", exprs, path);
                 Flow::Terminates
             }
+            "exit" => {
+                let exprs = return_exprs(self.ir, n);
+                self.emit(line, "exit", exprs, path);
+                Flow::Terminates
+            }
+            "next" | "last" | "redo" if self.opts.loop_control_outcomes => {
+                let exprs = return_exprs(self.ir, n);
+                self.emit(line, &n.name, exprs, path);
+                Flow::Terminates
+            }
             "entersub" => {
                 if let Some((via, msg)) = croak_call(self.ir, n) {
                     self.emit(line, &via, msg.into_iter().collect(), path);
                     Flow::Terminates
                 } else {
-                    self.plain_stmt(line, node, path, tail);
-                    Flow::Continue
+                    self.plain_stmt(line, node, path, tail)
                 }
             }
             "cond_expr" => self.walk_cond_expr(line, n, path, tail),
             "and" | "or" | "dor" => self.walk_logop(line, n, path, tail),
             "scope" | "leave" | "lineseq" => {
-                let stmts = stmt_list(n, line);
-                if self.walk_block(&stmts, path, tail) {
-                    Flow::Terminates
-                } else {
-                    Flow::Continue
+                let stmts = block_statements(n, line);
+                match self.walk_block(&stmts, path, tail) {
+                    None => Flow::Terminates,
+                    Some(set) => Flow::ContinueWith(set),
                 }
             }
             "leavetry" => {
                 // eval BLOCK: a die inside is caught, so the outside
                 // always continues.
-                let stmts = stmt_list(n, line);
+                let stmts = block_statements(n, line);
                 self.walk_block(&stmts, path, false);
                 Flow::Continue
             }
@@ -321,24 +515,39 @@ impl<'a> Walker<'a> {
                 self.walk_loop(line, n, path);
                 Flow::Continue
             }
-            _ => {
-                self.plain_stmt(line, node, path, tail);
-                Flow::Continue
-            }
+            _ => self.plain_stmt(line, node, path, tail),
         }
     }
 
     /// A plain statement: in tail position it is the implicit return
-    /// value; otherwise it is recorded on the route when the route is
-    /// already conditional.
-    fn plain_stmt(&mut self, line: Option<u32>, node: &'a OpNode, path: &PathSet, tail: bool) {
+    /// value; otherwise it is recorded on every route of the path set when
+    /// the set is conditional.
+    fn plain_stmt(
+        &mut self,
+        line: Option<u32>,
+        node: &'a OpNode,
+        path: &PathSet,
+        tail: bool,
+    ) -> Flow {
         if tail {
             self.emit_value(line, "implicit", node, path);
+            Flow::Continue
         } else if !is_unconditional(path) {
-            self.trace.push(StmtRef {
-                line,
-                text: render(self.ir, node),
-            });
+            let text = render(self.ir, node);
+            let set = path
+                .iter()
+                .map(|c| {
+                    let mut c = c.clone();
+                    c.stmts.push(StmtRef {
+                        line,
+                        text: text.clone(),
+                    });
+                    c
+                })
+                .collect();
+            Flow::ContinueWith(set)
+        } else {
+            Flow::Continue
         }
     }
 
@@ -359,6 +568,21 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Combine the path sets surviving the arms of a branch.
+    fn merge(rems: Vec<Option<PathSet>>) -> Flow {
+        let mut out: PathSet = Vec::new();
+        let mut any = false;
+        for r in rems.into_iter().flatten() {
+            any = true;
+            out.extend(r);
+        }
+        if any {
+            Flow::ContinueWith(out)
+        } else {
+            Flow::Terminates
+        }
+    }
+
     /// if/elsif/else and the ternary operator
     /// (LOGOP cond_expr: [condition, true arm, false arm]).
     fn walk_cond_expr(
@@ -372,15 +596,10 @@ impl<'a> Walker<'a> {
             return Flow::Continue;
         };
         let (t, f) = self.split(cond, path, Test::Truth);
-        let (t_set, f_set) = (lits_of(t), lits_of(f));
-        let t_term = self.walk_arm(n.kids.get(1), line, &t_set, tail);
-        let f_term = self.walk_arm(n.kids.get(2), line, &f_set, tail);
-        match (t_term, f_term) {
-            (true, true) => Flow::Terminates,
-            (true, false) => Flow::ContinueWith(f_set),
-            (false, true) => Flow::ContinueWith(t_set),
-            (false, false) => Flow::Continue,
-        }
+        let (t_set, f_set) = (conjs_of(t), conjs_of(f));
+        let t_rem = self.walk_arm(n.kids.get(1), line, &t_set, tail);
+        let f_rem = self.walk_arm(n.kids.get(2), line, &f_set, tail);
+        Self::merge(vec![t_rem, f_rem])
     }
 
     /// Statement-level and / or / dor (`STMT if COND`, `unless`, `//`).
@@ -401,7 +620,7 @@ impl<'a> Walker<'a> {
         } else {
             (no, yes)
         };
-        let arm_term = self.walk_arm(Some(arm), line, &lits_of(arm_routes), tail);
+        let arm_rem = self.walk_arm(Some(arm), line, &conjs_of(arm_routes), tail);
         if tail {
             // On the other side the logop's own value (the left-hand
             // side) is the value of the expression.
@@ -412,47 +631,41 @@ impl<'a> Walker<'a> {
                     kind: "implicit".into(),
                     exprs: vec![v],
                     when: r.lits.clone(),
-                    stmts: self.trace.clone(),
+                    stmts: r.stmts.clone(),
                 });
             }
         }
-        if arm_term {
-            Flow::ContinueWith(lits_of(lhs_routes))
-        } else {
-            Flow::Continue
-        }
+        Self::merge(vec![arm_rem, Some(conjs_of(lhs_routes))])
     }
 
     /// A branch arm: a block is walked as a statement list, a single
-    /// expression as one statement. Returns whether every route of the arm
-    /// terminated (an unreachable arm counts as terminated).
+    /// expression as one statement. Returns the path set surviving the
+    /// arm (`None` when every route terminated; an unreachable arm counts
+    /// as terminated). A missing arm passes its path set through.
     fn walk_arm(
         &mut self,
         node: Option<&'a OpNode>,
         line: Option<u32>,
         path: &PathSet,
         tail: bool,
-    ) -> bool {
+    ) -> Option<PathSet> {
         let Some(node) = node else {
-            return false;
+            return Some(path.clone());
         };
-        // Statements recorded inside the arm belong to its routes only.
-        let mark = self.trace.len();
         let n = node.skip_null();
-        let term = match n.name.as_str() {
+        match n.name.as_str() {
             "scope" | "leave" | "lineseq" => {
-                let stmts = stmt_list(n, line);
+                let stmts = block_statements(n, line);
                 self.walk_block(&stmts, path, tail)
             }
             _ => self.walk_block(&[(line, node)], path, tail),
-        };
-        self.trace.truncate(mark);
-        term
+        }
     }
 
     /// leaveloop: the loop control (iterator / continuation condition) is
     /// not an atom; only branches in the body are collected. The body may
-    /// run zero times, so it never terminates the enclosing block.
+    /// run zero times, so it never terminates the enclosing block and
+    /// nothing from inside it is carried past the loop.
     fn walk_loop(&mut self, line: Option<u32>, n: &'a OpNode, path: &PathSet) {
         for k in &n.kids {
             let s = k.skip_null();
@@ -478,14 +691,14 @@ impl<'a> Walker<'a> {
             return;
         }
         for conj in path {
-            for r in self.decompose(node, conj.clone(), false, false) {
+            for r in self.decompose(node, conj.lits.clone(), false, false) {
                 let v = value_str(&r);
                 self.paths.push(PathOutcome {
                     line,
                     kind: kind.to_string(),
                     exprs: vec![v],
                     when: r.lits,
-                    stmts: self.trace.clone(),
+                    stmts: conj.stmts.clone(),
                 });
             }
         }
@@ -498,8 +711,8 @@ impl<'a> Walker<'a> {
                 line,
                 kind: kind.to_string(),
                 exprs: exprs.clone(),
-                when: conj.clone(),
-                stmts: self.trace.clone(),
+                when: conj.lits.clone(),
+                stmts: conj.stmts.clone(),
             });
         }
     }
@@ -513,13 +726,14 @@ impl<'a> Walker<'a> {
         for conj in path {
             match test {
                 Test::Truth => {
-                    for r in self.decompose(cond, conj.clone(), false, true) {
+                    for r in self.decompose(cond, conj.lits.clone(), false, true) {
                         let atom = self.atom_of(&r);
                         // The expression is true when the deciding atom
                         // has the value `!neg`.
                         if let Some(l) = push_lit(&r.lits, atom, !r.neg) {
                             yes.push(Route {
                                 lits: l,
+                                stmts: conj.stmts.clone(),
                                 atom: Some(atom),
                                 ..r.clone()
                             });
@@ -527,6 +741,7 @@ impl<'a> Walker<'a> {
                         if let Some(l) = push_lit(&r.lits, atom, r.neg) {
                             no.push(Route {
                                 lits: l,
+                                stmts: conj.stmts.clone(),
                                 atom: Some(atom),
                                 ..r
                             });
@@ -538,14 +753,15 @@ impl<'a> Walker<'a> {
                     let d = self.intern_text(format!("defined({})", text));
                     let route = |lits| Route {
                         lits,
+                        stmts: conj.stmts.clone(),
                         atom: None,
                         value: text.clone(),
                         neg: false,
                     };
-                    if let Some(l) = push_lit(conj, d, true) {
+                    if let Some(l) = push_lit(&conj.lits, d, true) {
                         yes.push(route(l));
                     }
-                    if let Some(l) = push_lit(conj, d, false) {
+                    if let Some(l) = push_lit(&conj.lits, d, false) {
                         no.push(route(l));
                     }
                 }
@@ -558,7 +774,8 @@ impl<'a> Walker<'a> {
     /// conjunction `lits`. `neg` counts enclosing `not`s; `operand` is
     /// true when the node is an operand of `&&` / `||` / `!` or the
     /// condition of `?:` (its leaves become atoms) and false in value
-    /// position (`return` / implicit value / `?:` arms).
+    /// position (`return` / implicit value / `?:` arms). The routes carry
+    /// no statements; callers attach those of the incoming conjunction.
     fn decompose(
         &mut self,
         node: &'a OpNode,
@@ -579,6 +796,7 @@ impl<'a> Walker<'a> {
                     if let Some(sc) = push_lit(&lr.lits, atom, lhs_decides ^ lr.neg) {
                         out.push(Route {
                             lits: sc,
+                            stmts: Vec::new(),
                             atom: Some(atom),
                             value: lr.value.clone(),
                             neg: lr.neg ^ neg,
@@ -597,6 +815,7 @@ impl<'a> Walker<'a> {
                 if let Some(sc) = push_lit(&lits, d, true) {
                     out.push(Route {
                         lits: sc,
+                        stmts: Vec::new(),
                         atom: None,
                         value: text,
                         neg,
@@ -625,6 +844,7 @@ impl<'a> Walker<'a> {
                 let atom = operand.then(|| self.intern_text(text.clone()));
                 vec![Route {
                     lits,
+                    stmts: Vec::new(),
                     atom,
                     value: text,
                     neg,
@@ -671,26 +891,6 @@ impl<'a> Walker<'a> {
     }
 }
 
-/// Split the kids of a block op at COPs into (line, statement) pairs.
-/// enter / entertry / unstack do not count as statements.
-fn stmt_list<'a>(n: &'a OpNode, inherited: Option<u32>) -> Vec<(Option<u32>, &'a OpNode)> {
-    let mut line = inherited;
-    let mut out = Vec::new();
-    for k in &n.kids {
-        if k.class == OpClass::Cop {
-            if let crate::ir::OpDetail::Cop { line: l, .. } = &k.detail {
-                line = Some(*l);
-            }
-            continue;
-        }
-        match k.name.as_str() {
-            "enter" | "entertry" | "unstack" => {}
-            _ => out.push((line, k)),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,7 +916,9 @@ mod tests {
     #[test]
     fn bool_return_is_decomposed() {
         // sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }
-        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/bool_return.json"));
+        let l = logic_of(include_str!(
+            "../../../../t/golden/5.42-threaded/bool_return.json"
+        ));
         assert_eq!(l.conds, ["$a", "$b", "$c"]);
         let p = &l.paths;
         assert_eq!(p.len(), 3);
@@ -736,7 +938,9 @@ mod tests {
     #[test]
     fn compound_guard_shares_atoms() {
         // sub { my ($x, $y) = @_; if ($x && !$y) { "a" } elsif ($x) { "b" } else { "c" } }
-        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/compound_guard.json"));
+        let l = logic_of(include_str!(
+            "../../../../t/golden/5.42-threaded/compound_guard.json"
+        ));
         assert_eq!(l.conds, ["$x", "$y"]);
         let p = &l.paths;
         assert_eq!(p.len(), 3);
@@ -757,7 +961,9 @@ mod tests {
     #[test]
     fn arm_statements_are_recorded() {
         // sub { my ($x) = @_; if ($x) { log_it("a"); note(); return 1 } "z" }
-        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/arm_stmts.json"));
+        let l = logic_of(include_str!(
+            "../../../../t/golden/5.42-threaded/arm_stmts.json"
+        ));
         assert_eq!(l.conds, ["$x"]);
         let p = &l.paths;
         assert_eq!(p.len(), 2);
@@ -777,5 +983,168 @@ mod tests {
         assert_eq!(push_lit(&base, 0, true), Some(base.clone()));
         assert_eq!(push_lit(&base, 0, false), None);
         assert_eq!(push_lit(&base, 1, false).map(|v| v.len()), Some(2));
+    }
+
+    fn ir_of(golden: &str) -> SubIr {
+        serde_json::from_str(golden).expect("golden fixture deserializes")
+    }
+
+    fn range(ir: &SubIr, lo: u32, hi: u32) -> RangeLogic {
+        analyze_logic_range(ir, lo..=hi).expect("range has statements")
+    }
+
+    fn outcomes(l: &LogicSpec) -> Vec<(Option<u32>, &str, Vec<(usize, bool)>)> {
+        l.paths
+            .iter()
+            .map(|p| (p.line, p.kind.as_str(), whens(p)))
+            .collect()
+    }
+
+    fn stmt_texts(p: &PathOutcome) -> Vec<&str> {
+        p.stmts.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    const RANGE_GUARD: &str = include_str!("../../../../t/golden/5.42-threaded/range_guard.json");
+    const RANGE_NESTED_IF: &str =
+        include_str!("../../../../t/golden/5.42-threaded/range_nested_if.json");
+    const RANGE_LOOP_NEXT: &str =
+        include_str!("../../../../t/golden/5.42-threaded/range_loop_next.json");
+
+    // sub {                      # 1
+    //  my ($x, $y) = @_;         # 2
+    //  return 0 unless $x;       # 3
+    //  log_it("go");             # 4
+    //  if ($y) {                 # 5
+    //   note();                  # 6
+    //   return 1;                # 7
+    //  }                         # 8
+    //  done();                   # 9
+    //  return 2;                 # 10
+    // }                          # 11
+
+    #[test]
+    fn range_fallthrough_after_guard() {
+        let ir = ir_of(RANGE_GUARD);
+        let r = range(&ir, 3, 4);
+        assert_eq!((r.lines, r.snapped, r.tail, r.in_block_of), ((3, 4), false, false, None));
+        assert_eq!(r.logic.conds, ["$x"]);
+        assert_eq!(
+            outcomes(&r.logic),
+            [
+                (Some(3), "return", vec![(0, false)]),
+                (Some(4), "fallthrough", vec![(0, true)]),
+            ]
+        );
+        assert_eq!(stmt_texts(&r.logic.paths[1]), ["Fixtures::log_it(\"go\")"]);
+        assert_eq!(r.logic.table.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn range_header_snaps_whole_if() {
+        let ir = ir_of(RANGE_GUARD);
+        // lines 5-8 touch only the `if`; line 8 (`}`) has no statement
+        let r = range(&ir, 5, 8);
+        assert_eq!((r.lines, r.snapped, r.in_block_of), ((5, 7), true, None));
+        assert_eq!(r.logic.conds, ["$y"]);
+        assert_eq!(
+            outcomes(&r.logic),
+            [
+                (Some(7), "return", vec![(0, true)]),
+                (Some(7), "fallthrough", vec![(0, false)]),
+            ]
+        );
+        assert_eq!(stmt_texts(&r.logic.paths[0]), ["Fixtures::note()"]);
+    }
+
+    #[test]
+    fn range_inside_if_arm_descends() {
+        let ir = ir_of(RANGE_GUARD);
+        let r = range(&ir, 6, 7);
+        assert_eq!(r.in_block_of, Some(27), "the `if` statement");
+        assert_eq!(r.stmt_ids, [33, 39]);
+        assert!(r.logic.conds.is_empty());
+        assert_eq!(outcomes(&r.logic), [(Some(7), "return", vec![])]);
+    }
+
+    #[test]
+    fn range_tail_keeps_implicit_value() {
+        let ir = ir_of(RANGE_NESTED_IF);
+        // `finish();` is the sub's last statement
+        let r = range(&ir, 9, 10);
+        assert_eq!((r.lines, r.snapped, r.tail), ((10, 10), true, true));
+        assert_eq!(outcomes(&r.logic), [(Some(10), "implicit", vec![])]);
+        assert_eq!(r.logic.paths[0].exprs, ["Fixtures::finish()"]);
+    }
+
+    #[test]
+    fn range_whole_body_matches_analyze_logic() {
+        for golden in [RANGE_GUARD, RANGE_NESTED_IF] {
+            let ir = ir_of(golden);
+            let r = range(&ir, 1, 1000);
+            assert!(r.tail);
+            assert_eq!(r.logic, analyze_logic(&ir));
+        }
+    }
+
+    // sub {                        # 1
+    //  my (@items) = @_;           # 2
+    //  my $n = 0;                  # 3
+    //  for my $it (@items) {       # 4
+    //   next unless $it;           # 5
+    //   last if $it eq "stop";     # 6
+    //   $n++;                      # 7
+    //  }                           # 8
+    //  return $n;                  # 9
+    // }                            # 10
+
+    #[test]
+    fn range_loop_body_control_is_outcome() {
+        let ir = ir_of(RANGE_LOOP_NEXT);
+        let r = range(&ir, 5, 7);
+        assert_eq!(r.in_block_of, Some(16), "the loop");
+        assert_eq!(r.logic.conds, ["$it", "$it eq \"stop\""]);
+        assert_eq!(
+            outcomes(&r.logic),
+            [
+                (Some(5), "next", vec![(0, false)]),
+                (Some(6), "last", vec![(0, true), (1, true)]),
+                (Some(7), "fallthrough", vec![(0, true), (1, false)]),
+            ]
+        );
+        assert_eq!(stmt_texts(&r.logic.paths[2]), ["++$n"]);
+        // whole-sub mode keeps loop control as plain statements
+        let whole = analyze_logic(&ir);
+        assert_eq!(outcomes(&whole), [(Some(9), "return", vec![])]);
+    }
+
+    #[test]
+    fn range_without_statements_is_an_error() {
+        let ir = ir_of(RANGE_GUARD);
+        assert_eq!(
+            analyze_logic_range(&ir, 11..=12),
+            Err(RangeError::NoStatements { lines: (11, 12) })
+        );
+        assert_eq!(
+            analyze_logic_range(&ir, 1..=1),
+            Err(RangeError::NoStatements { lines: (1, 1) }),
+            "`sub {{` has no statement"
+        );
+    }
+
+    #[test]
+    fn fallthrough_branch_carries_arm_statements() {
+        // if ($a) { log_it("a"); die "bad" if $b; note() } else { done() } finish()
+        let l = analyze_logic(&ir_of(RANGE_NESTED_IF));
+        assert_eq!(l.conds, ["$a", "$b"]);
+        assert_eq!(
+            outcomes(&l),
+            [
+                (Some(5), "die", vec![(0, true), (1, true)]),
+                (Some(10), "implicit", vec![(0, true), (1, false)]),
+                (Some(10), "implicit", vec![(0, false)]),
+            ]
+        );
+        assert_eq!(stmt_texts(&l.paths[1]), ["Fixtures::log_it(\"a\")", "Fixtures::note()"]);
+        assert_eq!(stmt_texts(&l.paths[2]), ["Fixtures::done()"]);
     }
 }

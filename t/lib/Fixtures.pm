@@ -22,6 +22,10 @@ our @FIXTURES = (
     [print_chain  => q{sub { my ($x, $y, $z) = @_; if ($x < 0) { print "x < 0" } elsif ($y < 0) { print "y < 0" } elsif ($z < 0) { print "z < 0" } else { print "x,y,z >= 0" } }}],
     [interp       => 'sub { my ($x) = @_; "a$x b" }'],
     [arm_stmts    => 'sub { my ($x) = @_; if ($x) { log_it("a"); note(); return 1 } "z" }'],
+    # Multi-line fixtures for range analysis (logic::analyze_logic_range)
+    [range_guard  => "sub {\n my (\$x, \$y) = \@_;\n return 0 unless \$x;\n log_it(\"go\");\n if (\$y) {\n  note();\n  return 1;\n }\n done();\n return 2;\n}"],
+    [range_nested_if => "sub {\n my (\$a, \$b) = \@_;\n if (\$a) {\n  log_it(\"a\");\n  die \"bad\" if \$b;\n  note();\n } else {\n  done();\n }\n finish();\n}"],
+    [range_loop_next => "sub {\n my (\@items) = \@_;\n my \$n = 0;\n for my \$it (\@items) {\n  next unless \$it;\n  last if \$it eq \"stop\";\n  \$n++;\n }\n return \$n;\n}"],
 );
 
 sub compile {
