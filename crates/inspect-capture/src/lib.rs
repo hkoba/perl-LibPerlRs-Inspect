@@ -6,12 +6,17 @@
 
 mod begins;
 mod capture;
+pub mod dbsrc;
 pub mod filescope;
 pub mod packages;
 mod raw;
 pub mod reqtrace;
+pub mod subs;
 
 pub use begins::{
     FileBegins, FileUse, enable_begin_capture, file_begins, saved_begins, set_begin_capture,
 };
-pub use capture::{capture_main, capture_sub, exec_op_names};
+pub use capture::{
+    Captured, capture_main, capture_main_full, capture_sub, capture_sub_full, cv_lines,
+    exec_op_names,
+};

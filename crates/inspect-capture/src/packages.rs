@@ -111,6 +111,7 @@ fn av_strings(perl: &Perl, av: *mut libperl_rs::AV) -> Vec<String> {
 /// Where a sub was named: the package and name of the glob it was
 /// defined through (`CvGV`), which an import or a glob alias does not
 /// change.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Home {
     pub package: String,
     pub name: String,

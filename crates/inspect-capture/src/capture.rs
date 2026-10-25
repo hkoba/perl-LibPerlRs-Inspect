@@ -9,7 +9,7 @@ use std::collections::HashMap;
 #[cfg(perlapi_ver44)]
 use inspect_core::ir::NamedParam;
 use inspect_core::ir::{
-    DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit, padname_flags,
+    AnonSub, DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit, padname_flags,
 };
 use libperl_rs::{Cop, Cv, Gv, Op, Perl};
 use libperl_sys::{OPclass, OPf_KIDS, PerlInterpreter, methop, op, padop, sv, svop, svtype};
@@ -27,8 +27,21 @@ pub fn exec_op_names(cv: Cv) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// A captured tree together with the live handles the IR cannot hold.
+pub struct Captured {
+    pub ir: SubIr,
+    /// The anonymous subs of `ir.anon_subs`, in the same order, as live
+    /// CVs (valid as long as the enclosing CV is).
+    pub anon_cvs: Vec<(u32, Cv)>,
+}
+
 /// Copy the coderef's entire OP tree into a SubIr
 pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
+    capture_sub_full(perl, cv).map(|c| c.ir)
+}
+
+/// [`capture_sub`] keeping the CVs of the anonymous subs found in the tree.
+pub fn capture_sub_full(perl: &Perl, cv: Cv) -> Result<Captured, String> {
     if cv.is_xsub() {
         return Err("cannot analyze an XSUB (no op tree)".into());
     }
@@ -36,13 +49,18 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
     if root.is_null() {
         return Err("subroutine has no op tree".into());
     }
-    Ok(capture_tree(perl, cv, root, cv.start()))
+    Ok(capture_tree_full(perl, cv, root, cv.start()))
 }
 
 /// Copy the main program's top level into a SubIr: the pad of
 /// `PL_main_cv` with the op tree under `PL_main_root` (the main CV keeps
 /// its ops there, not in CvROOT). Call after `perl_parse`.
 pub fn capture_main(perl: &Perl) -> Result<SubIr, String> {
+    capture_main_full(perl).map(|c| c.ir)
+}
+
+/// [`capture_main`] keeping the CVs of the anonymous subs found in the tree.
+pub fn capture_main_full(perl: &Perl) -> Result<Captured, String> {
     let my_perl = perl.as_ptr();
     let cv = Cv::from_raw(libperl_sys::PL_main_cv!(my_perl))
         .ok_or_else(|| "no main CV (not parsed?)".to_string())?;
@@ -50,7 +68,7 @@ pub fn capture_main(perl: &Perl) -> Result<SubIr, String> {
     if root.is_null() {
         return Err("the main program has no op tree".into());
     }
-    Ok(capture_tree(
+    Ok(capture_tree_full(
         perl,
         cv,
         root,
@@ -61,6 +79,10 @@ pub fn capture_main(perl: &Perl) -> Result<SubIr, String> {
 /// Capture the tree under `root` (executed from `start`), resolving pad
 /// references through `cv`'s padlist
 pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> SubIr {
+    capture_tree_full(perl, cv, root, start).ir
+}
+
+fn capture_tree_full(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> Captured {
     let mut cap = Capturer {
         my_perl: perl.as_ptr(),
         cv,
@@ -69,9 +91,24 @@ pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const o
         min_line: u32::MAX,
         max_line: 0,
         cops: Vec::new(),
+        anon: Vec::new(),
     };
     let mut root_node = cap.walk(root);
     cap.resolve(&mut root_node);
+
+    let anon_cvs: Vec<(u32, Cv)> = cap
+        .anon
+        .iter()
+        .filter_map(|(id, p)| Cv::from_raw(*p as *mut libperl_sys::CV).map(|cv| (*id, cv)))
+        .collect();
+    let anon_subs = anon_cvs
+        .iter()
+        .map(|(id, cv)| AnonSub {
+            node_id: *id,
+            file: cv.file(),
+            lines: cv_lines(perl, *cv),
+        })
+        .collect();
 
     let mut ir = SubIr {
         file: cv.file(),
@@ -84,6 +121,7 @@ pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const o
         pad: capture_pad(cv, &cap.cops),
         start_id: cap.lookup(start),
         root: root_node,
+        anon_subs,
     };
     let intro = ir.intro_lines();
     for p in &mut ir.pad {
@@ -91,7 +129,29 @@ pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const o
             p.line = Some(*line);
         }
     }
-    ir
+    Captured { ir, anon_cvs }
+}
+
+/// (min line, max line) over the COPs of a sub's tree, without capturing
+/// it. `None` for XSUBs, bodiless subs and trees without COPs.
+pub fn cv_lines(perl: &Perl, cv: Cv) -> Option<(u32, u32)> {
+    let mut acc: Option<(u32, u32)> = None;
+    let mut stack: Vec<Op> = cv.root_op().into_iter().collect();
+    while let Some(o) = stack.pop() {
+        if let Some(cop) = o.as_cop(perl) {
+            let l = cop.line();
+            if l > 0 {
+                acc = Some(match acc {
+                    Some((lo, hi)) => (lo.min(l), hi.max(l)),
+                    None => (l, l),
+                });
+            }
+        }
+        if (o.flags() as u32 & OPf_KIDS) != 0 {
+            stack.extend(o.kids());
+        }
+    }
+    acc
 }
 
 /// Raw pointers kept for pass 2 (pushed onto raws in the same order as ids)
@@ -112,6 +172,8 @@ struct Capturer {
     max_line: u32,
     /// (cop_seq, line) of every COP in the sub, for placing pad names
     cops: Vec<(u32, u32)>,
+    /// (node id, CV) of every `anoncode` constant
+    anon: Vec<(u32, *const sv)>,
 }
 
 impl Capturer {
@@ -206,6 +268,10 @@ impl Capturer {
                         p as *const sv
                     }
                 };
+                if !sv.is_null() && SvTYPE(sv) == svtype::SVt_PVCV {
+                    let id = self.ids[&(o as usize)];
+                    self.anon.push((id, sv));
+                }
                 sv_detail(sv)
             }
             OPclass::OPclass_PADOP => {

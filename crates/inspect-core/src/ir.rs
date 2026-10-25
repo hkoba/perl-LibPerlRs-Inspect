@@ -27,6 +27,22 @@ pub struct SubIr {
     pub start_id: Option<u32>,
     /// The tree under CvROOT
     pub root: OpNode,
+    /// Anonymous subs (`sub {...}`) whose prototype CV is a constant of
+    /// this tree, keyed by the node id of that constant (an `anoncode`
+    /// op). Their bodies are separate CVs, not part of `root`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anon_subs: Vec<AnonSub>,
+}
+
+/// An anonymous sub referenced from a tree (see [`SubIr::anon_subs`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnonSub {
+    /// Node id of the `anoncode` constant holding the sub.
+    pub node_id: u32,
+    /// CvFILE of the anonymous sub.
+    pub file: Option<String>,
+    /// (min line, max line) over the COPs of its body.
+    pub lines: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
