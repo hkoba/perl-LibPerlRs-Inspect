@@ -54,12 +54,21 @@ fn analyze_logic_range_json(my_perl: &Perl, code: Cv, start: IV, end: IV) -> Res
     serde_json::to_string(&r).map_err(|e| e.to_string())
 }
 
-/// `LibPerlRs::Inspect::analyze_logic_opts_json($coderef, $alias_modifies)`
+/// `LibPerlRs::Inspect::analyze_logic_opts_json($coderef, $alias_modifies, $identity)`
 /// — the logic (truth table) of the sub with options, as a JSON string.
+/// `$identity` is `strict`, `expr` or `var` (see `Identity`).
 #[xs_sub]
-fn analyze_logic_opts_json(my_perl: &Perl, code: Cv, alias_modifies: IV) -> Result<String, String> {
+fn analyze_logic_opts_json(
+    my_perl: &Perl,
+    code: Cv,
+    alias_modifies: IV,
+    identity: &str,
+) -> Result<String, String> {
+    use inspect_core::passes::logic::{Identity, LogicOpts};
     let ir = inspect_capture::capture_sub(my_perl, code)?;
-    let opts = inspect_core::passes::logic::LogicOpts { alias_modifies: alias_modifies != 0 };
+    let identity = Identity::parse(identity)
+        .ok_or_else(|| format!("identity must be strict, expr or var, not {identity:?}"))?;
+    let opts = LogicOpts { alias_modifies: alias_modifies != 0, identity };
     let l = inspect_core::passes::logic::analyze_logic_with(&ir, &opts);
     serde_json::to_string(&l).map_err(|e| e.to_string())
 }

@@ -101,6 +101,14 @@
 //!   operands are reordered, which assumes a symmetric overload;
 //! - a variable modified through an alias (`f($x)`, `for (@a)`, a reference
 //!   taken earlier) is not seen unless `alias_modifies` is set.
+//!
+//! [`Identity`] relaxes atom identity on request: `Expr` ignores
+//! modifications and keys sites by their expression (an assignment is the
+//! expression it is written as), `Var` ignores modifications and takes an
+//! assignment for its target, so a table can show one column per
+//! variable test even when the variable is reassigned between the tests.
+//! Both can merge tests that see different values, which is the point:
+//! the table then describes the program's shape, not its semantics.
 
 use std::ops::RangeInclusive;
 
@@ -190,6 +198,55 @@ pub struct TableRow {
     pub path: Option<usize>,
 }
 
+/// When two sites are the same atom (one column of the truth table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Identity {
+    /// By value: the variables an expression reads, at their generation
+    /// (sites separated by a modification of a variable are distinct),
+    /// and an assignment stands for its target afterwards. With
+    /// `defined($x = a()) && $x >= 3 || defined($x = b()) && $x < 3`:
+    /// four atoms.
+    #[default]
+    Strict,
+    /// By expression: modifications are ignored and an assignment is the
+    /// expression it is written as. Three atoms in the example:
+    /// `defined($x = a())`, `defined($x = b())`, `$x >= 3`.
+    Expr,
+    /// By variable: modifications are ignored and an assignment is its
+    /// target, so every test of `$x` is about "`$x`". Two atoms in the
+    /// example, `defined($x)` and `$x >= 3`; atoms are displayed with
+    /// assignments collapsed to their target.
+    Var,
+}
+
+impl Identity {
+    pub const ALL: [Identity; 3] = [Identity::Strict, Identity::Expr, Identity::Var];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Identity::Strict => "strict",
+            Identity::Expr => "expr",
+            Identity::Var => "var",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Identity> {
+        Identity::ALL.into_iter().find(|i| i.as_str() == s)
+    }
+
+    /// The mode after this one, cyclically (strict → expr → var → strict).
+    pub fn next(self) -> Identity {
+        let i = Identity::ALL.iter().position(|m| *m == self).unwrap_or(0);
+        Identity::ALL[(i + 1) % Identity::ALL.len()]
+    }
+
+    /// Whether variable modifications separate atoms.
+    pub fn tracks_generations(self) -> bool {
+        self == Identity::Strict
+    }
+}
+
 /// How a statement list is walked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WalkOpts {
@@ -203,13 +260,19 @@ pub struct WalkOpts {
     /// Treat sub-call argument aliasing (`f($x)`, `$x->m`, `map {} @a`:
     /// `OPf_MOD` without `OPf_REF`) as a modification of the variable.
     pub alias_modifies: bool,
+    /// When two sites are one atom.
+    pub identity: Identity,
 }
 
 /// Options of [`analyze_logic_with`] / [`analyze_logic_range_with`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct LogicOpts {
     /// See [`WalkOpts::alias_modifies`].
+    #[serde(default)]
     pub alias_modifies: bool,
+    /// See [`Identity`].
+    #[serde(default)]
+    pub identity: Identity,
 }
 
 /// Result of [`analyze_logic_range`].
@@ -263,6 +326,7 @@ pub fn analyze_logic_with(ir: &SubIr, lopts: &LogicOpts) -> LogicSpec {
         tail: has_implicit_value(ir),
         loop_control_outcomes: false,
         alias_modifies: lopts.alias_modifies,
+        identity: lopts.identity,
     };
     analyze_logic_stmts(ir, &statements(ir), &opts)
 }
@@ -277,7 +341,7 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         col_neg: Vec::new(),
         cond_sites: Vec::new(),
         cur_line: None,
-        env: Env::default(),
+        env: Env::new(opts.identity.tracks_generations()),
         paths: Vec::new(),
     };
     w.walk_top(stmts);
@@ -359,6 +423,7 @@ pub fn analyze_logic_range_with(
             tail,
             loop_control_outcomes: true,
             alias_modifies: lopts.alias_modifies,
+        identity: lopts.identity,
         };
         let logic = analyze_logic_stmts(ir, sel, &opts);
         return Ok(RangeLogic {
@@ -857,7 +922,14 @@ impl<'a> Walker<'a> {
     fn split(&mut self, cond: &'a OpNode, path: &PathSet, test: Test) -> (Vec<Route>, Vec<Route>) {
         let mut yes = Vec::new();
         let mut no = Vec::new();
+        // The condition is decomposed once per incoming conjunction; each
+        // evaluation starts from the environment before the condition, so
+        // an assignment inside it (`elsif (defined($x = f()))` reached on
+        // two routes) bumps the generation once, not once per route.
+        let before = self.env.clone();
+        let mut after = before.clone();
         for conj in path {
+            self.env = before.clone();
             match test {
                 Test::Truth => {
                     for r in self.decompose(cond, conj.lits.clone(), false, true) {
@@ -883,7 +955,7 @@ impl<'a> Walker<'a> {
                     }
                 }
                 Test::Defined => {
-                    let text = render(self.ir, cond);
+                    let text = logic_canon::display(self.ir, &self.opts, cond);
                     let c = logic_canon::canon(self.ir, &mut self.env, &self.opts, cond);
                     let d = self.intern(
                         Canon {
@@ -910,7 +982,9 @@ impl<'a> Walker<'a> {
                     }
                 }
             }
+            after.join(&self.env);
         }
+        self.env = after;
         (yes, no)
     }
 
@@ -955,7 +1029,7 @@ impl<'a> Walker<'a> {
                 out
             }
             ("dor", [l, r]) => {
-                let text = render(self.ir, l);
+                let text = logic_canon::display(self.ir, &self.opts, l);
                 let c = logic_canon::canon(self.ir, &mut self.env, &self.opts, l);
                 let d = self.intern(
                     Canon {
@@ -1007,7 +1081,8 @@ impl<'a> Walker<'a> {
                 let text = render(self.ir, n);
                 let atom = if operand {
                     let c = logic_canon::canon(self.ir, &mut self.env, &self.opts, n);
-                    Some(self.intern(c, text.clone(), n.id))
+                    let label = logic_canon::display(self.ir, &self.opts, n);
+                    Some(self.intern(c, label, n.id))
                 } else {
                     self.note_mods(n);
                     None

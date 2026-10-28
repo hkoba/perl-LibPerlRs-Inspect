@@ -13,13 +13,18 @@
 //! tree, see [`modified_vars`]. Perl marks plain sub-call arguments
 //! (`f($x)`, `$x->m`) as `OPf_MOD` because `@_` aliases them; by default
 //! that is not treated as a modification (`WalkOpts::alias_modifies`).
+//!
+//! That is [`Identity::Strict`]. Under [`Identity::Expr`] and
+//! [`Identity::Var`] generations are never bumped (every variable stays
+//! at generation 0), and an assignment is keyed by its text (`Expr`) or
+//! by its target (`Var`); see [`value_key`] and [`display`].
 
 use std::collections::HashMap;
 
 use crate::ir::{OpDetail, OpNode, SubIr};
 use crate::render::render;
 
-use super::logic::WalkOpts;
+use super::logic::{Identity, WalkOpts};
 
 const OPF_REF: u8 = 16;
 const OPF_MOD: u8 = 32;
@@ -58,14 +63,28 @@ pub(crate) struct Canon {
 }
 
 /// Generations of the variables modified so far.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Env {
     gens: HashMap<VarId, u32>,
+    /// Whether modifications count ([`Identity::tracks_generations`]).
+    track: bool,
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Env::new(true)
+    }
 }
 
 impl Env {
+    pub(crate) fn new(track: bool) -> Env {
+        Env { gens: HashMap::new(), track }
+    }
+
     pub(crate) fn bump(&mut self, id: VarId) {
-        *self.gens.entry(id).or_insert(0) += 1;
+        if self.track {
+            *self.gens.entry(id).or_insert(0) += 1;
+        }
     }
 
     /// Bump each distinct variable once (a scan may report the same
@@ -347,14 +366,16 @@ fn read_vars(n: &OpNode, out: &mut Vec<VarId>) {
 }
 
 /// Identity of the value of `node`, applying the modifications it makes.
+/// An assignment is its target (`Strict`, `Var`) or its own text (`Expr`).
 pub(crate) fn value_key(ir: &SubIr, env: &mut Env, opts: &WalkOpts, node: &OpNode) -> String {
     let n = node.skip_null();
     if let Some(v) = var_of(n) {
         return var_key(ir, env, &v);
     }
-    match n.name.as_str() {
+    match (n.name.as_str(), opts.identity) {
+        (_, Identity::Expr) => {}
         // The value of an assignment is its target.
-        "sassign" => {
+        ("sassign", _) => {
             if let (Some(rhs), Some(lhs)) = (n.kids.first(), n.kids.get(1)) {
                 if let Some(v) = var_of(lhs) {
                     let mut mods = Vec::new();
@@ -365,7 +386,7 @@ pub(crate) fn value_key(ir: &SubIr, env: &mut Env, opts: &WalkOpts, node: &OpNod
                 }
             }
         }
-        "padsv_store" => {
+        ("padsv_store", _) => {
             let v = VarId::Pad(n.targ);
             let mut mods = Vec::new();
             for k in &n.kids {
@@ -379,7 +400,8 @@ pub(crate) fn value_key(ir: &SubIr, env: &mut Env, opts: &WalkOpts, node: &OpNod
     }
     // Opaque: the rendered text plus the generation of every variable it
     // reads. An expression that itself modifies a variable (`$x++ > 1`)
-    // may read the old or the new value, so it is made unique.
+    // may read the old or the new value, so it is made unique — when
+    // generations are tracked at all.
     let mut mods = Vec::new();
     modified_vars(n, opts, &mut mods);
     let mut reads = Vec::new();
@@ -390,10 +412,45 @@ pub(crate) fn value_key(ir: &SubIr, env: &mut Env, opts: &WalkOpts, node: &OpNod
         key.push_str(&format!(" ⟨{}⟩", gens.join(",")));
     }
     if !mods.is_empty() {
-        key.push_str(&format!("#node{}", n.id));
+        if opts.identity.tracks_generations() {
+            key.push_str(&format!("#node{}", n.id));
+        }
         env.bump_all(mods);
     }
     key
+}
+
+/// The text an atom is shown as: its rendering, with every assignment to
+/// a variable collapsed to the variable under [`Identity::Var`]
+/// (`defined($x = f())` → `defined($x)`).
+pub(crate) fn display(ir: &SubIr, opts: &WalkOpts, node: &OpNode) -> String {
+    if opts.identity != Identity::Var {
+        return render(ir, node);
+    }
+    render(ir, &collapse_assigns(node))
+}
+
+fn collapse_assigns(node: &OpNode) -> OpNode {
+    let n = node.skip_null();
+    match n.name.as_str() {
+        "sassign" => {
+            if let Some(lhs) = n.kids.get(1) {
+                if var_of(lhs).is_some() {
+                    return lhs.clone();
+                }
+            }
+        }
+        "padsv_store" => {
+            let mut v = n.clone();
+            v.name = "padsv".into();
+            v.kids.clear();
+            return v;
+        }
+        _ => {}
+    }
+    let mut out = n.clone();
+    out.kids = n.kids.iter().map(collapse_assigns).collect();
+    out
 }
 
 /// Canonical identity of the atom `node`.
@@ -553,6 +610,79 @@ mod tests {
         let opts = WalkOpts { alias_modifies: true, ..Default::default() };
         modified_vars(&call, &opts, &mut out);
         assert_eq!(out, [VarId::Pad(1)]);
+    }
+
+    fn assign(id: u32, targ: u64, rhs: OpNode) -> OpNode {
+        node(id, "sassign", vec![rhs, pad(id + 1, targ)])
+    }
+
+    fn call(id: u32, name: &str) -> OpNode {
+        // entersub > gv: opaque, reads no variable
+        let mut g = node(id + 1, "gv", vec![]);
+        g.detail = OpDetail::Gv { name: name.into(), stash: Some("main".into()) };
+        node(id, "entersub", vec![g])
+    }
+
+    /// `defined($x = a())`, `$x >= 3`, `defined($x = b())`, `$x < 3`
+    fn keys_under(identity: Identity) -> Vec<Canon> {
+        let opts = WalkOpts { identity, ..Default::default() };
+        let ir = ir_with(node(0, "leavesub", vec![]));
+        let mut env = Env::new(identity.tracks_generations());
+        [
+            node(10, "defined", vec![assign(11, 1, call(12, "a"))]),
+            cmp("ge", pad(20, 1), konst(21, 3)),
+            node(30, "defined", vec![assign(31, 1, call(32, "b"))]),
+            cmp("lt", pad(40, 1), konst(41, 3)),
+        ]
+        .iter()
+        .map(|n| canon(&ir, &mut env, &opts, n))
+        .collect()
+    }
+
+    fn distinct(keys: &[Canon]) -> usize {
+        let mut seen: Vec<&str> = Vec::new();
+        for k in keys {
+            if !seen.contains(&k.key.as_str()) {
+                seen.push(&k.key);
+            }
+        }
+        seen.len()
+    }
+
+    #[test]
+    fn strict_keeps_the_reassigned_tests_apart() {
+        let k = keys_under(Identity::Strict);
+        assert_eq!(distinct(&k), 4, "{k:?}");
+        assert!(k[1].neg && !k[3].neg);
+    }
+
+    #[test]
+    fn expr_keys_assignments_by_their_text() {
+        let k = keys_under(Identity::Expr);
+        assert_eq!(distinct(&k), 3, "{k:?}");
+        assert_eq!(k[1].key, k[3].key, "$x >= 3 and $x < 3 are one column");
+        assert_ne!(k[0].key, k[2].key, "different assignments");
+    }
+
+    #[test]
+    fn var_keys_assignments_by_their_target() {
+        let k = keys_under(Identity::Var);
+        assert_eq!(distinct(&k), 2, "{k:?}");
+        assert_eq!(k[0].key, k[2].key);
+        assert_eq!(k[1].key, k[3].key);
+    }
+
+    #[test]
+    fn var_display_collapses_assignments() {
+        let ir = ir_with(node(0, "leavesub", vec![]));
+        let n = node(10, "defined", vec![assign(11, 1, call(12, "a"))]);
+        let var = WalkOpts { identity: Identity::Var, ..Default::default() };
+        assert_eq!(display(&ir, &var, &n), "defined($x)");
+        assert_eq!(display(&ir, &WalkOpts::default(), &n), "defined($x = a())");
+        let mut store = node(13, "padsv_store", vec![call(14, "a")]);
+        store.targ = 2;
+        let n = cmp("lt", store, konst(15, 3));
+        assert_eq!(display(&ir, &var, &n), "$y < 3");
     }
 
     #[test]

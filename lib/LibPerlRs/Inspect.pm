@@ -36,10 +36,24 @@ sub analyze_logic_range {
 #   alias_modifies => 1   treat f($x) / $x->m (aliasing through @_) as a
 #                         modification of $x, so conditions on $x before
 #                         and after the call are kept apart
+#   identity => 'strict'  (default) two sites are one condition when they
+#                         test the same value: a reassignment of $x in
+#                         between keeps them apart, and `defined($x = f())`
+#                         is the same as a later `defined($x)`
+#   identity => 'expr'    reassignments are ignored; an assignment is the
+#                         expression it is written as, so
+#                         `defined($x = a())` and `defined($x = b())` are
+#                         two conditions but `$x >= 3` and a later `$x < 3`
+#                         are one
+#   identity => 'var'     reassignments are ignored and an assignment stands
+#                         for its variable: `defined($x = a())`,
+#                         `defined($x = b())` and `defined($x)` are one
+#                         condition, shown as `defined($x)`
 sub analyze_logic_opts {
     my ($code, $opts) = @_;
     $opts ||= {};
-    $_json->decode(analyze_logic_opts_json($code, $opts->{alias_modifies} ? 1 : 0));
+    $_json->decode(analyze_logic_opts_json($code, $opts->{alias_modifies} ? 1 : 0,
+                                           $opts->{identity} // 'strict'));
 }
 
 # analyze() returns a native hashref directly from the XS side (no JSON round trip).

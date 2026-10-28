@@ -123,4 +123,32 @@ subtest 'branch arms' => sub {
     is scalar @{$m->{cond_sites}[0]}, 3, 'three sites';
 };
 
+subtest 'identity modes: strict / expr / var' => sub {
+    my $src = 'sub { my $x; if (defined($x = sourceA()) and $x >= 3) { "a" } elsif (defined($x = sourceB()) and $x < 3) { "b" } else { "c" } }';
+    my $code = eval $src or die $@;
+    my $strict = LibPerlRs::Inspect::analyze_logic_opts($code, { identity => 'strict' });
+    is_deeply $strict->{conds}, ['defined($x = sourceA())', '$x >= 3', 'defined($x = sourceB())', '$x < 3'],
+        'strict: four conditions' or diag explain $strict->{conds};
+    is_deeply LibPerlRs::Inspect::analyze_logic_opts($code)->{conds}, $strict->{conds}, 'strict is the default';
+
+    my $expr = LibPerlRs::Inspect::analyze_logic_opts($code, { identity => 'expr' });
+    is_deeply $expr->{conds}, ['defined($x = sourceA())', '$x >= 3', 'defined($x = sourceB())'],
+        'expr: three conditions' or diag explain $expr->{conds};
+    is_deeply site_negs($expr, 1), [0, 1], '$x < 3 is the negated site of $x >= 3';
+    is $expr->{cond_sites}[1][1]{text}, '$x < 3', 'site text keeps its spelling';
+
+    my $var = LibPerlRs::Inspect::analyze_logic_opts($code, { identity => 'var' });
+    is_deeply $var->{conds}, ['defined($x)', '$x >= 3'], 'var: two conditions, assignments collapsed'
+        or diag explain $var->{conds};
+    is scalar @{$var->{cond_sites}[0]}, 2, 'both defined() sites';
+    is_deeply [map { $_->{text} } @{$var->{cond_sites}[0]}], ['defined($x)', 'defined($x)'], 'site texts collapsed too';
+    # with two columns the table has four rows; "b" needs defined and !(>= 3)
+    is_deeply [map { [$_->{exprs}[0], whens($_)] } @{$var->{paths}}],
+        [['"a"', [[0, 1], [1, 1]]], ['"b"', [[0, 1], [1, 0]]], ['"c"', [[0, 0]]]],
+        'paths under var identity' or diag explain $var->{paths};
+
+    eval { LibPerlRs::Inspect::analyze_logic_opts($code, { identity => 'bogus' }) };
+    like $@, qr/identity must be strict, expr or var/, 'unknown identity dies';
+};
+
 done_testing;
