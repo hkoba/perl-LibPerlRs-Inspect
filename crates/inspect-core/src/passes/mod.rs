@@ -11,6 +11,7 @@ pub mod argspec;
 pub mod deps;
 pub mod lints;
 pub mod logic;
+mod logic_canon;
 pub mod retspec;
 pub mod types;
 

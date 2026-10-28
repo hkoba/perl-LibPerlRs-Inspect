@@ -32,6 +32,16 @@ sub analyze_logic_range {
     $_json->decode(analyze_logic_range_json($code, $start, $end));
 }
 
+# The logic (truth table) of $code with options:
+#   alias_modifies => 1   treat f($x) / $x->m (aliasing through @_) as a
+#                         modification of $x, so conditions on $x before
+#                         and after the call are kept apart
+sub analyze_logic_opts {
+    my ($code, $opts) = @_;
+    $opts ||= {};
+    $_json->decode(analyze_logic_opts_json($code, $opts->{alias_modifies} ? 1 : 0));
+}
+
 # analyze() returns a native hashref directly from the XS side (no JSON round trip).
 # Use analyze_json() if you want the JSON string.
 

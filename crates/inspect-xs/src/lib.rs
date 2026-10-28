@@ -54,6 +54,16 @@ fn analyze_logic_range_json(my_perl: &Perl, code: Cv, start: IV, end: IV) -> Res
     serde_json::to_string(&r).map_err(|e| e.to_string())
 }
 
+/// `LibPerlRs::Inspect::analyze_logic_opts_json($coderef, $alias_modifies)`
+/// — the logic (truth table) of the sub with options, as a JSON string.
+#[xs_sub]
+fn analyze_logic_opts_json(my_perl: &Perl, code: Cv, alias_modifies: IV) -> Result<String, String> {
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let opts = inspect_core::passes::logic::LogicOpts { alias_modifies: alias_modifies != 0 };
+    let l = inspect_core::passes::logic::analyze_logic_with(&ir, &opts);
+    serde_json::to_string(&l).map_err(|e| e.to_string())
+}
+
 /// `LibPerlRs::Inspect::analyze($coderef)` — analysis report as a native
 /// nested hashref (no JSON round-trip on the Perl side).
 #[xs_sub]
@@ -266,6 +276,7 @@ xs_boot! {
         analyze_json,
         analyze,
         analyze_logic_range_json,
+        analyze_logic_opts_json,
         begin_capture,
         begins,
         require_sites,

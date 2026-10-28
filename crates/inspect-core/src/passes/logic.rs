@@ -22,10 +22,26 @@
 //! - `xor`, `&&=` / `||=` / `//=`, calls, comparisons and everything else
 //!   are opaque leaves.
 //!
+//! Atoms are identified not by their text but by a canonical key (see
+//! [`super::logic_canon`]): the variables an expression reads, each with
+//! its *generation* (how many times it has been modified so far in walk
+//! order), and comparisons brought to `<` / `==` form. So
+//! `defined(my $x = f())` and a later `defined($x)` are one atom (the
+//! value of an assignment is its target), `length($s) >= 8` and
+//! `length($s) < 8` are one atom with opposite polarity, while `$x` before
+//! and after `$x = g()` are two. Modifications in one arm of a branch
+//! separate every later atom from those before the branch; a loop
+//! separates the atoms before it, inside it and after it for every
+//! variable modified in the loop. Plain sub-call arguments (`f($x)`,
+//! which perl marks as modifiable because `@_` aliases them) are not
+//! modifications unless `WalkOpts::alias_modifies` is set.
+//!
 //! Every atom records where it occurs (`cond_sites`): the node id of the
-//! op whose text was interned and the line of the enclosing statement.
-//! Perl keeps line numbers per statement (COP), so the atoms of a
-//! condition spread over several lines all report the statement's line.
+//! op whose text was interned, the line of the enclosing statement, the
+//! text at that site and whether the site is the negation of the column.
+//! The column's text is that of its first site. Perl keeps line numbers
+//! per statement (COP), so the atoms of a condition spread over several
+//! lines all report the statement's line.
 //!
 //! Decomposed positions: guard conditions (`cond_expr` and statement-level
 //! `and` / `or` / `dor`), the single expression of `return EXPR`, and the
@@ -78,7 +94,13 @@
 //! - loop control conditions are not atoms; only branches in the loop body
 //!   are collected;
 //! - `render` does not track precedence, so an opaque `!($a && $b)` (for
-//!   example as a `die` argument) is displayed as `!$a && $b`.
+//!   example as a `die` argument) is displayed as `!$a && $b`;
+//! - `a >= b` is taken as the negation of `a < b` and `a != b` as that of
+//!   `a == b`, which assumes a total order: false for NaN operands and for
+//!   overloaded operators that are not mutually consistent; `==` / `eq`
+//!   operands are reordered, which assumes a symmetric overload;
+//! - a variable modified through an alias (`f($x)`, `for (@a)`, a reference
+//!   taken earlier) is not seen unless `alias_modifies` is set.
 
 use std::ops::RangeInclusive;
 
@@ -87,6 +109,7 @@ use serde::{Deserialize, Serialize};
 use crate::ir::{OpClass, OpNode, SubIr};
 use crate::render::render;
 
+use super::logic_canon::{self, Canon, Env};
 use super::retspec::{croak_call, return_exprs};
 use super::{Stmt, block_statements, has_implicit_value, line_span, nested_blocks, statements};
 
@@ -115,10 +138,17 @@ pub struct LogicSpec {
 }
 
 /// An occurrence of an atom: the op node and the line of its statement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CondSite {
     pub node: u32,
     pub line: Option<u32>,
+    /// The site's truth is the negation of the column (`length($s) < 8`
+    /// at a site of the column `length($s) >= 8`).
+    #[serde(default)]
+    pub neg: bool,
+    /// Rendered text at this site.
+    #[serde(default)]
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -170,6 +200,16 @@ pub struct WalkOpts {
     /// `next` / `last` / `redo` terminate a route (as outcomes of that
     /// kind) instead of being plain statements.
     pub loop_control_outcomes: bool,
+    /// Treat sub-call argument aliasing (`f($x)`, `$x->m`, `map {} @a`:
+    /// `OPf_MOD` without `OPf_REF`) as a modification of the variable.
+    pub alias_modifies: bool,
+}
+
+/// Options of [`analyze_logic_with`] / [`analyze_logic_range_with`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LogicOpts {
+    /// See [`WalkOpts::alias_modifies`].
+    pub alias_modifies: bool,
 }
 
 /// Result of [`analyze_logic_range`].
@@ -214,9 +254,15 @@ impl std::error::Error for RangeError {}
 
 /// Logic of the whole sub body.
 pub fn analyze_logic(ir: &SubIr) -> LogicSpec {
+    analyze_logic_with(ir, &LogicOpts::default())
+}
+
+/// [`analyze_logic`] with options.
+pub fn analyze_logic_with(ir: &SubIr, lopts: &LogicOpts) -> LogicSpec {
     let opts = WalkOpts {
         tail: has_implicit_value(ir),
         loop_control_outcomes: false,
+        alias_modifies: lopts.alias_modifies,
     };
     analyze_logic_stmts(ir, &statements(ir), &opts)
 }
@@ -227,8 +273,11 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         ir,
         opts: *opts,
         conds: Vec::new(),
+        keys: Vec::new(),
+        col_neg: Vec::new(),
         cond_sites: Vec::new(),
         cur_line: None,
+        env: Env::default(),
         paths: Vec::new(),
     };
     w.walk_top(stmts);
@@ -257,6 +306,15 @@ fn union(a: Option<(u32, u32)>, b: Option<(u32, u32)>) -> Option<(u32, u32)> {
 pub fn analyze_logic_range(
     ir: &SubIr,
     lines: RangeInclusive<u32>,
+) -> Result<RangeLogic, RangeError> {
+    analyze_logic_range_with(ir, lines, &LogicOpts::default())
+}
+
+/// [`analyze_logic_range`] with options.
+pub fn analyze_logic_range_with(
+    ir: &SubIr,
+    lines: RangeInclusive<u32>,
+    lopts: &LogicOpts,
 ) -> Result<RangeLogic, RangeError> {
     let (lo, hi) = (*lines.start(), *lines.end());
     let mut list: Vec<Stmt<'_>> = statements(ir);
@@ -300,6 +358,7 @@ pub fn analyze_logic_range(
         let opts = WalkOpts {
             tail,
             loop_control_outcomes: true,
+            alias_modifies: lopts.alias_modifies,
         };
         let logic = analyze_logic_stmts(ir, sel, &opts);
         return Ok(RangeLogic {
@@ -341,13 +400,24 @@ struct Route {
     stmts: Vec<StmtRef>,
     /// Atom whose truth decides the expression on this route, if one has
     /// been interned (`None` for an opaque `//` left-hand side).
-    atom: Option<usize>,
+    atom: Option<Atom>,
+    /// Canonical identity of an opaque `//` left-hand side, for interning
+    /// it on demand without rescanning its modifications.
+    canon: Option<Canon>,
     /// Rendered value of the expression on this route (before negation).
     value: String,
     /// Node id of the op `value` renders (the atom's site when it is
     /// interned later).
     node: u32,
     /// The value is negated an odd number of times by enclosing `not`s.
+    neg: bool,
+}
+
+/// An interned atom as seen from one site: `neg` says the site's truth is
+/// the column's negation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Atom {
+    idx: usize,
     neg: bool,
 }
 
@@ -435,9 +505,15 @@ struct Walker<'a> {
     ir: &'a SubIr,
     opts: WalkOpts,
     conds: Vec<String>,
+    /// Canonical key of each atom (index-parallel to `conds`).
+    keys: Vec<String>,
+    /// The column's polarity relative to its key: that of its first site.
+    col_neg: Vec<bool>,
     cond_sites: Vec<Vec<CondSite>>,
     /// Line of the statement being walked (recorded with each atom).
     cur_line: Option<u32>,
+    /// Generations of the variables modified so far.
+    env: Env,
     paths: Vec<PathOutcome>,
 }
 
@@ -500,22 +576,26 @@ impl<'a> Walker<'a> {
                 Flow::Terminates
             }
             "die" => {
+                self.note_mods(n);
                 let exprs = return_exprs(self.ir, n);
                 self.emit(line, "die", exprs, path);
                 Flow::Terminates
             }
             "exit" => {
+                self.note_mods(n);
                 let exprs = return_exprs(self.ir, n);
                 self.emit(line, "exit", exprs, path);
                 Flow::Terminates
             }
             "next" | "last" | "redo" if self.opts.loop_control_outcomes => {
+                self.note_mods(n);
                 let exprs = return_exprs(self.ir, n);
                 self.emit(line, &n.name, exprs, path);
                 Flow::Terminates
             }
             "entersub" => {
                 if let Some((via, msg)) = croak_call(self.ir, n) {
+                    self.note_mods(n);
                     self.emit(line, &via, msg.into_iter().collect(), path);
                     Flow::Terminates
                 } else {
@@ -546,6 +626,14 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Apply the modifications made by the ops under `n` to the
+    /// generations (for statements that are not decomposed).
+    fn note_mods(&mut self, n: &OpNode) {
+        let mut mods = Vec::new();
+        logic_canon::modified_vars(n, &self.opts, &mut mods);
+        self.env.bump_all(mods);
+    }
+
     /// A plain statement: in tail position it is the implicit return
     /// value; otherwise it is recorded on every route of the path set when
     /// the set is conditional.
@@ -560,6 +648,7 @@ impl<'a> Walker<'a> {
             self.emit_value(line, "implicit", node, path);
             Flow::Continue
         } else if !is_unconditional(path) {
+            self.note_mods(node);
             let text = render(self.ir, node);
             let set = path
                 .iter()
@@ -574,6 +663,7 @@ impl<'a> Walker<'a> {
                 .collect();
             Flow::ContinueWith(set)
         } else {
+            self.note_mods(node);
             Flow::Continue
         }
     }
@@ -590,6 +680,7 @@ impl<'a> Walker<'a> {
         if let [expr] = kids[..] {
             self.emit_value(line, "return", expr, path);
         } else {
+            self.note_mods(n);
             let exprs = return_exprs(self.ir, n);
             self.emit(line, "return", exprs, path);
         }
@@ -624,8 +715,11 @@ impl<'a> Walker<'a> {
         };
         let (t, f) = self.split(cond, path, Test::Truth);
         let (t_set, f_set) = (conjs_of(t), conjs_of(f));
+        let before = self.env.clone();
         let t_rem = self.walk_arm(n.kids.get(1), line, &t_set, tail);
+        let after_t = std::mem::replace(&mut self.env, before);
         let f_rem = self.walk_arm(n.kids.get(2), line, &f_set, tail);
+        self.env.join(&after_t);
         Self::merge(vec![t_rem, f_rem])
     }
 
@@ -647,7 +741,9 @@ impl<'a> Walker<'a> {
         } else {
             (no, yes)
         };
+        let before = self.env.clone();
         let arm_rem = self.walk_arm(Some(arm), line, &conjs_of(arm_routes), tail);
+        self.env.join(&before);
         if tail {
             // On the other side the logop's own value (the left-hand
             // side) is the value of the expression.
@@ -694,6 +790,15 @@ impl<'a> Walker<'a> {
     /// run zero times, so it never terminates the enclosing block and
     /// nothing from inside it is carried past the loop.
     fn walk_loop(&mut self, line: Option<u32>, n: &'a OpNode, path: &PathSet) {
+        // A body atom is evaluated once per iteration: with a modification
+        // anywhere in the loop, the atoms before, inside and after it may
+        // all see different values.
+        self.note_mods(n);
+        self.walk_loop_kids(line, n, path);
+        self.note_mods(n);
+    }
+
+    fn walk_loop_kids(&mut self, line: Option<u32>, n: &'a OpNode, path: &PathSet) {
         for k in &n.kids {
             let s = k.skip_null();
             match s.name.as_str() {
@@ -715,6 +820,7 @@ impl<'a> Walker<'a> {
     fn emit_value(&mut self, line: Option<u32>, kind: &str, node: &'a OpNode, path: &PathSet) {
         self.cur_line = line;
         if !is_decomposable(node) {
+            self.note_mods(node);
             self.emit(line, kind, vec![render(self.ir, node)], path);
             return;
         }
@@ -758,7 +864,7 @@ impl<'a> Walker<'a> {
                         let atom = self.atom_of(&r);
                         // The expression is true when the deciding atom
                         // has the value `!neg`.
-                        if let Some(l) = push_lit(&r.lits, atom, !r.neg) {
+                        if let Some(l) = push_lit(&r.lits, atom.idx, !r.neg ^ atom.neg) {
                             yes.push(Route {
                                 lits: l,
                                 stmts: conj.stmts.clone(),
@@ -766,7 +872,7 @@ impl<'a> Walker<'a> {
                                 ..r.clone()
                             });
                         }
-                        if let Some(l) = push_lit(&r.lits, atom, r.neg) {
+                        if let Some(l) = push_lit(&r.lits, atom.idx, r.neg ^ atom.neg) {
                             no.push(Route {
                                 lits: l,
                                 stmts: conj.stmts.clone(),
@@ -778,19 +884,28 @@ impl<'a> Walker<'a> {
                 }
                 Test::Defined => {
                     let text = render(self.ir, cond);
-                    let d = self.intern(format!("defined({})", text), cond.id);
+                    let c = logic_canon::canon(self.ir, &mut self.env, &self.opts, cond);
+                    let d = self.intern(
+                        Canon {
+                            key: format!("defined({})", c.key),
+                            neg: false,
+                        },
+                        format!("defined({})", text),
+                        cond.id,
+                    );
                     let route = |lits| Route {
                         lits,
                         stmts: conj.stmts.clone(),
                         atom: None,
+                        canon: Some(c.clone()),
                         value: text.clone(),
                         node: cond.id,
                         neg: false,
                     };
-                    if let Some(l) = push_lit(&conj.lits, d, true) {
+                    if let Some(l) = push_lit(&conj.lits, d.idx, !d.neg) {
                         yes.push(route(l));
                     }
-                    if let Some(l) = push_lit(&conj.lits, d, false) {
+                    if let Some(l) = push_lit(&conj.lits, d.idx, d.neg) {
                         no.push(route(l));
                     }
                 }
@@ -822,17 +937,18 @@ impl<'a> Walker<'a> {
                 let mut out = Vec::new();
                 for lr in self.decompose(l, lits, false, true) {
                     let atom = self.atom_of(&lr);
-                    if let Some(sc) = push_lit(&lr.lits, atom, lhs_decides ^ lr.neg) {
+                    if let Some(sc) = push_lit(&lr.lits, atom.idx, lhs_decides ^ lr.neg ^ atom.neg) {
                         out.push(Route {
                             lits: sc,
                             stmts: Vec::new(),
                             atom: Some(atom),
+                            canon: None,
                             value: lr.value.clone(),
                             node: lr.node,
                             neg: lr.neg ^ neg,
                         });
                     }
-                    if let Some(go) = push_lit(&lr.lits, atom, !lhs_decides ^ lr.neg) {
+                    if let Some(go) = push_lit(&lr.lits, atom.idx, !lhs_decides ^ lr.neg ^ atom.neg) {
                         out.extend(self.decompose(r, go, neg, true));
                     }
                 }
@@ -840,43 +956,67 @@ impl<'a> Walker<'a> {
             }
             ("dor", [l, r]) => {
                 let text = render(self.ir, l);
-                let d = self.intern(format!("defined({})", text), l.id);
+                let c = logic_canon::canon(self.ir, &mut self.env, &self.opts, l);
+                let d = self.intern(
+                    Canon {
+                        key: format!("defined({})", c.key),
+                        neg: false,
+                    },
+                    format!("defined({})", text),
+                    l.id,
+                );
                 let mut out = Vec::new();
-                if let Some(sc) = push_lit(&lits, d, true) {
+                if let Some(sc) = push_lit(&lits, d.idx, !d.neg) {
                     out.push(Route {
                         lits: sc,
                         stmts: Vec::new(),
                         atom: None,
+                        canon: Some(c),
                         value: text,
                         node: l.id,
                         neg,
                     });
                 }
-                if let Some(go) = push_lit(&lits, d, false) {
+                if let Some(go) = push_lit(&lits, d.idx, d.neg) {
                     out.extend(self.decompose(r, go, neg, operand));
                 }
                 out
             }
             ("cond_expr", [c, t, f]) => {
                 let mut out = Vec::new();
-                for cr in self.decompose(c, lits, false, true) {
+                let routes = self.decompose(c, lits, false, true);
+                let before = self.env.clone();
+                let mut after_t = before.clone();
+                for cr in routes {
                     let atom = self.atom_of(&cr);
-                    if let Some(go) = push_lit(&cr.lits, atom, !cr.neg) {
+                    if let Some(go) = push_lit(&cr.lits, atom.idx, !cr.neg ^ atom.neg) {
+                        self.env = before.clone();
                         out.extend(self.decompose(t, go, neg, operand));
+                        after_t.join(&self.env);
                     }
-                    if let Some(go) = push_lit(&cr.lits, atom, cr.neg) {
+                    if let Some(go) = push_lit(&cr.lits, atom.idx, cr.neg ^ atom.neg) {
+                        self.env = before.clone();
                         out.extend(self.decompose(f, go, neg, operand));
+                        after_t.join(&self.env);
                     }
                 }
+                self.env = after_t;
                 out
             }
             _ => {
                 let text = render(self.ir, n);
-                let atom = operand.then(|| self.intern(text.clone(), n.id));
+                let atom = if operand {
+                    let c = logic_canon::canon(self.ir, &mut self.env, &self.opts, n);
+                    Some(self.intern(c, text.clone(), n.id))
+                } else {
+                    self.note_mods(n);
+                    None
+                };
                 vec![Route {
                     lits,
                     stmts: Vec::new(),
                     atom,
+                    canon: None,
                     value: text,
                     node: n.id,
                     neg,
@@ -887,32 +1027,44 @@ impl<'a> Walker<'a> {
 
     /// The atom deciding a route, interning the route's value on demand
     /// (an opaque `//` left-hand side whose truth is tested later).
-    fn atom_of(&mut self, r: &Route) -> usize {
+    fn atom_of(&mut self, r: &Route) -> Atom {
         match r.atom {
             Some(a) => a,
-            None => self.intern(r.value.clone(), r.node),
+            None => {
+                let c = r.canon.clone().unwrap_or_else(|| Canon {
+                    key: r.value.clone(),
+                    neg: false,
+                });
+                self.intern(c, r.value.clone(), r.node)
+            }
         }
     }
 
-    /// Index of the atom `text`, recording `(node, cur_line)` as one of
-    /// its sites.
-    fn intern(&mut self, text: String, node: u32) -> usize {
-        let i = match self.conds.iter().position(|c| *c == text) {
+    /// The atom with canonical identity `c` (a new column, named by
+    /// `text`, when the key is unseen), recording `(node, cur_line)` as
+    /// one of its sites. The column takes the polarity of its first site.
+    fn intern(&mut self, c: Canon, text: String, node: u32) -> Atom {
+        let i = match self.keys.iter().position(|k| *k == c.key) {
             Some(i) => i,
             None => {
-                self.conds.push(text);
+                self.conds.push(text.clone());
+                self.keys.push(c.key);
+                self.col_neg.push(c.neg);
                 self.cond_sites.push(Vec::new());
                 self.conds.len() - 1
             }
         };
-        let site = CondSite {
-            node,
-            line: self.cur_line,
-        };
-        if !self.cond_sites[i].contains(&site) {
-            self.cond_sites[i].push(site);
+        let neg = c.neg ^ self.col_neg[i];
+        let sites = &mut self.cond_sites[i];
+        if !sites.iter().any(|s| s.node == node && s.line == self.cur_line) {
+            sites.push(CondSite {
+                node,
+                line: self.cur_line,
+                neg,
+                text,
+            });
         }
-        i
+        Atom { idx: i, neg }
     }
 
     /// Enumerate every assignment and look up the first path whose `when`
@@ -989,12 +1141,55 @@ mod tests {
         let lines = super::super::node_lines(&ir);
         for (cond, sites) in l.conds.iter().zip(&l.cond_sites) {
             assert_eq!(sites.len(), 1, "{cond} occurs once");
-            let site = sites[0];
+            let site = &sites[0];
             let node = ir.node_by_id(site.node).expect("site node is in the IR");
             assert_eq!(render(&ir, node), *cond);
+            assert_eq!(site.text, *cond);
+            assert!(!site.neg);
             assert_eq!(site.line, lines[site.node as usize]);
             assert!(site.line.is_some());
         }
+    }
+
+    #[test]
+    fn ident_defined_assign_is_one_atom() {
+        // return 0 unless defined(my $y = f($x)); return 1 if defined($y); 2
+        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/ident_defined_assign.json"));
+        assert_eq!(l.conds.len(), 1, "{:?}", l.conds);
+        assert_eq!(l.cond_sites[0].len(), 2);
+        assert!(l.cond_sites[0].iter().all(|s| !s.neg));
+        assert_eq!(l.cond_sites[0][1].text, "defined($y)");
+        assert_eq!(l.paths.len(), 2, "the implicit 2 is unreachable");
+    }
+
+    #[test]
+    fn ident_range_split_negates_second_site() {
+        // return "short" if length($s) < 8; return "ok" if length($s) >= 8; "x"
+        let golden = include_str!("../../../../t/golden/5.42-threaded/ident_range_split.json");
+        let l = logic_of(golden);
+        assert_eq!(l.conds, ["length($s) < 8"]);
+        let negs: Vec<bool> = l.cond_sites[0].iter().map(|s| s.neg).collect();
+        assert_eq!(negs, [false, true]);
+        assert_eq!(l.paths.len(), 2);
+        assert_eq!(whens(&l.paths[1]), [(0, false)]);
+        assert!(l.table.as_ref().unwrap().iter().all(|r| r.path.is_some()));
+        let ir: SubIr = serde_json::from_str(golden).unwrap();
+        let r = analyze_logic_range(&ir, 3..=4).unwrap();
+        assert_eq!(r.logic.conds.len(), 1);
+        let kinds: Vec<&str> = r.logic.paths.iter().map(|p| p.kind.as_str()).collect();
+        assert_eq!(kinds, ["return", "return"], "no fall-through: the guards are exhaustive");
+    }
+
+    #[test]
+    fn ident_loop_assign_separates_three_columns() {
+        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/ident_loop_assign.json"));
+        assert_eq!(l.conds.len(), 3, "{:?}", l.conds);
+    }
+
+    #[test]
+    fn ident_elem_assign_separates() {
+        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/ident_elem_assign.json"));
+        assert_eq!(l.conds.len(), 2, "{:?}", l.conds);
     }
 
     #[test]

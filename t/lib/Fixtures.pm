@@ -25,6 +25,11 @@ our @FIXTURES = (
     # Multi-line fixtures for range analysis (logic::analyze_logic_range)
     [range_guard  => "sub {\n my (\$x, \$y) = \@_;\n return 0 unless \$x;\n log_it(\"go\");\n if (\$y) {\n  note();\n  return 1;\n }\n done();\n return 2;\n}"],
     [range_nested_if => "sub {\n my (\$a, \$b) = \@_;\n if (\$a) {\n  log_it(\"a\");\n  die \"bad\" if \$b;\n  note();\n } else {\n  done();\n }\n finish();\n}"],
+    # Atom identity (logic_canon): the same condition spelled twice
+    [ident_defined_assign => "sub {\n my (\$x) = \@_;\n return 0 unless defined(my \$y = f(\$x));\n return 1 if defined(\$y);\n 2;\n}"],
+    [ident_range_split => "sub {\n my (\$s) = \@_;\n return \"short\" if length(\$s) < 8;\n return \"ok\" if length(\$s) >= 8;\n \"x\";\n}"],
+    [ident_loop_assign => "sub {\n my (\$x, \@a) = \@_;\n return 0 if \$x > 1;\n for my \$i (\@a) {\n  \$x = \$i;\n  return 1 if \$x > 1;\n }\n return 2 if \$x > 1;\n 3;\n}"],
+    [ident_elem_assign => "sub {\n my (\%h) = \@_;\n return 1 if \$h{k};\n \$h{k} = 1;\n return 2 if \$h{k};\n 3;\n}"],
     [range_loop_next => "sub {\n my (\@items) = \@_;\n my \$n = 0;\n for my \$it (\@items) {\n  next unless \$it;\n  last if \$it eq \"stop\";\n  \$n++;\n }\n return \$n;\n}"],
 );
 
