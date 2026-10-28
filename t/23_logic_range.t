@@ -58,6 +58,8 @@ subtest 'header line only selects the whole if' => sub {
     is_deeply $r->{lines}, [5, 7], 'snapped to the statement span';
     ok $r->{snapped}, 'snapped';
     is_deeply $r->{logic}{conds}, ['$y'], 'atom';
+    is_deeply [map { $_->{line} } @{$r->{logic}{cond_sites}[0]}], [5],
+        'the atom sits on the if line';
     is_deeply outcomes($r->{logic}),
         [[7, 'return', [[0, 1]]], [7, 'fallthrough', [[0, 0]]]],
         'return from the arm or fall through';

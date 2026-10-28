@@ -22,6 +22,11 @@
 //! - `xor`, `&&=` / `||=` / `//=`, calls, comparisons and everything else
 //!   are opaque leaves.
 //!
+//! Every atom records where it occurs (`cond_sites`): the node id of the
+//! op whose text was interned and the line of the enclosing statement.
+//! Perl keeps line numbers per statement (COP), so the atoms of a
+//! condition spread over several lines all report the statement's line.
+//!
 //! Decomposed positions: guard conditions (`cond_expr` and statement-level
 //! `and` / `or` / `dor`), the single expression of `return EXPR`, and the
 //! implicit final expression, whenever the top op is `and` / `or` / `dor` /
@@ -102,6 +107,18 @@ pub struct LogicSpec {
     /// Truth table; `None` when there are no atoms or more than
     /// `MAX_TABLE_CONDS`.
     pub table: Option<Vec<TableRow>>,
+    /// Where each atom of `conds` occurs (index-parallel to `conds`):
+    /// one entry per op whose text was interned, several when the same
+    /// text appears more than once.
+    #[serde(default)]
+    pub cond_sites: Vec<Vec<CondSite>>,
+}
+
+/// An occurrence of an atom: the op node and the line of its statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CondSite {
+    pub node: u32,
+    pub line: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -210,6 +227,8 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         ir,
         opts: *opts,
         conds: Vec::new(),
+        cond_sites: Vec::new(),
+        cur_line: None,
         paths: Vec::new(),
     };
     w.walk_top(stmts);
@@ -218,6 +237,7 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         conds: w.conds,
         paths: w.paths,
         table,
+        cond_sites: w.cond_sites,
     }
 }
 
@@ -324,6 +344,9 @@ struct Route {
     atom: Option<usize>,
     /// Rendered value of the expression on this route (before negation).
     value: String,
+    /// Node id of the op `value` renders (the atom's site when it is
+    /// interned later).
+    node: u32,
     /// The value is negated an odd number of times by enclosing `not`s.
     neg: bool,
 }
@@ -412,6 +435,9 @@ struct Walker<'a> {
     ir: &'a SubIr,
     opts: WalkOpts,
     conds: Vec<String>,
+    cond_sites: Vec<Vec<CondSite>>,
+    /// Line of the statement being walked (recorded with each atom).
+    cur_line: Option<u32>,
     paths: Vec<PathOutcome>,
 }
 
@@ -466,6 +492,7 @@ impl<'a> Walker<'a> {
         path: &PathSet,
         tail: bool,
     ) -> Flow {
+        self.cur_line = line;
         let n = node.skip_null();
         match n.name.as_str() {
             "return" => {
@@ -686,6 +713,7 @@ impl<'a> Walker<'a> {
     /// Record a value-position expression: decomposed into one outcome per
     /// short-circuit route when possible, otherwise rendered as a whole.
     fn emit_value(&mut self, line: Option<u32>, kind: &str, node: &'a OpNode, path: &PathSet) {
+        self.cur_line = line;
         if !is_decomposable(node) {
             self.emit(line, kind, vec![render(self.ir, node)], path);
             return;
@@ -750,12 +778,13 @@ impl<'a> Walker<'a> {
                 }
                 Test::Defined => {
                     let text = render(self.ir, cond);
-                    let d = self.intern_text(format!("defined({})", text));
+                    let d = self.intern(format!("defined({})", text), cond.id);
                     let route = |lits| Route {
                         lits,
                         stmts: conj.stmts.clone(),
                         atom: None,
                         value: text.clone(),
+                        node: cond.id,
                         neg: false,
                     };
                     if let Some(l) = push_lit(&conj.lits, d, true) {
@@ -799,6 +828,7 @@ impl<'a> Walker<'a> {
                             stmts: Vec::new(),
                             atom: Some(atom),
                             value: lr.value.clone(),
+                            node: lr.node,
                             neg: lr.neg ^ neg,
                         });
                     }
@@ -810,7 +840,7 @@ impl<'a> Walker<'a> {
             }
             ("dor", [l, r]) => {
                 let text = render(self.ir, l);
-                let d = self.intern_text(format!("defined({})", text));
+                let d = self.intern(format!("defined({})", text), l.id);
                 let mut out = Vec::new();
                 if let Some(sc) = push_lit(&lits, d, true) {
                     out.push(Route {
@@ -818,6 +848,7 @@ impl<'a> Walker<'a> {
                         stmts: Vec::new(),
                         atom: None,
                         value: text,
+                        node: l.id,
                         neg,
                     });
                 }
@@ -841,12 +872,13 @@ impl<'a> Walker<'a> {
             }
             _ => {
                 let text = render(self.ir, n);
-                let atom = operand.then(|| self.intern_text(text.clone()));
+                let atom = operand.then(|| self.intern(text.clone(), n.id));
                 vec![Route {
                     lits,
                     stmts: Vec::new(),
                     atom,
                     value: text,
+                    node: n.id,
                     neg,
                 }]
             }
@@ -858,17 +890,29 @@ impl<'a> Walker<'a> {
     fn atom_of(&mut self, r: &Route) -> usize {
         match r.atom {
             Some(a) => a,
-            None => self.intern_text(r.value.clone()),
+            None => self.intern(r.value.clone(), r.node),
         }
     }
 
-    fn intern_text(&mut self, text: String) -> usize {
-        if let Some(i) = self.conds.iter().position(|c| *c == text) {
-            i
-        } else {
-            self.conds.push(text);
-            self.conds.len() - 1
+    /// Index of the atom `text`, recording `(node, cur_line)` as one of
+    /// its sites.
+    fn intern(&mut self, text: String, node: u32) -> usize {
+        let i = match self.conds.iter().position(|c| *c == text) {
+            Some(i) => i,
+            None => {
+                self.conds.push(text);
+                self.cond_sites.push(Vec::new());
+                self.conds.len() - 1
+            }
+        };
+        let site = CondSite {
+            node,
+            line: self.cur_line,
+        };
+        if !self.cond_sites[i].contains(&site) {
+            self.cond_sites[i].push(site);
         }
+        i
     }
 
     /// Enumerate every assignment and look up the first path whose `when`
@@ -933,6 +977,24 @@ mod tests {
         assert_eq!(table_path(&l, &[false, true, true]), Some(0));
         assert_eq!(table_path(&l, &[true, false, false]), Some(2));
         assert_eq!(table_path(&l, &[true, true, false]), Some(1));
+    }
+
+    #[test]
+    fn cond_sites_point_at_the_atoms() {
+        // sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }
+        let golden = include_str!("../../../../t/golden/5.42-threaded/bool_return.json");
+        let ir: SubIr = serde_json::from_str(golden).unwrap();
+        let l = analyze_logic(&ir);
+        assert_eq!(l.cond_sites.len(), l.conds.len());
+        let lines = super::super::node_lines(&ir);
+        for (cond, sites) in l.conds.iter().zip(&l.cond_sites) {
+            assert_eq!(sites.len(), 1, "{cond} occurs once");
+            let site = sites[0];
+            let node = ir.node_by_id(site.node).expect("site node is in the IR");
+            assert_eq!(render(&ir, node), *cond);
+            assert_eq!(site.line, lines[site.node as usize]);
+            assert!(site.line.is_some());
+        }
     }
 
     #[test]
