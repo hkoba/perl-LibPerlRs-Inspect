@@ -86,6 +86,7 @@ fn capture_tree_full(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> 
     let mut cap = Capturer {
         my_perl: perl.as_ptr(),
         cv,
+        package: cv.gv(perl).and_then(|g| g.stash_name()),
         ids: HashMap::new(),
         raws: Vec::new(),
         min_line: u32::MAX,
@@ -112,6 +113,7 @@ fn capture_tree_full(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> 
 
     let mut ir = SubIr {
         file: cv.file(),
+        package: cap.package.clone(),
         lines: if cap.max_line > 0 && cap.min_line <= cap.max_line {
             Some((cap.min_line, cap.max_line))
         } else {
@@ -166,6 +168,8 @@ struct RawLinks {
 struct Capturer {
     my_perl: *mut PerlInterpreter,
     cv: Cv,
+    /// The package the sub was compiled in (see `SubIr::package`).
+    package: Option<String>,
     ids: HashMap<usize, u32>,
     raws: Vec<RawLinks>,
     min_line: u32,
@@ -403,7 +407,9 @@ impl Capturer {
                         items = items.add(1);
                         let name = match sv_lit(self.aux_item_sv(items)) {
                             SvLit::Glob { name, stash } => match stash.as_deref() {
-                                Some("main") | None => Some(name),
+                                None => Some(name),
+                                Some(pkg) if pkg == self.package.as_deref().unwrap_or("main") => Some(name),
+                                Some("main") if inspect_core::render::forced_main(&name) => Some(name),
                                 Some(pkg) => Some(format!("{}::{}", pkg, name)),
                             },
                             _ => None,

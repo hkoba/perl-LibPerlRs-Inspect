@@ -529,6 +529,7 @@ mod tests {
         use crate::ir::PadEntry;
         SubIr {
             file: None,
+            package: None,
             lines: None,
             proto: None,
             pad: vec![

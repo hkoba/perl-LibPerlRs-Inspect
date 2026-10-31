@@ -54,15 +54,15 @@ pub fn render(ir: &SubIr, node: &OpNode) -> String {
         ),
         "padav" | "padhv" => pad_var(ir, n.targ),
         "const" => match &n.detail {
-            OpDetail::Const(lit) => lit_str(lit),
+            OpDetail::Const(lit) => lit_str(ir, lit),
             _ => "<const>".into(),
         },
         "gvsv" => match &n.detail {
-            OpDetail::Gv { name, stash } => sigil_gv('$', name, stash.as_deref()),
+            OpDetail::Gv { name, stash } => sigil_gv(ir, '$', name, stash.as_deref()),
             _ => "<gvsv>".into(),
         },
         "gv" => match &n.detail {
-            OpDetail::Gv { name, stash } => sigil_gv('*', name, stash.as_deref()),
+            OpDetail::Gv { name, stash } => sigil_gv(ir, '*', name, stash.as_deref()),
             _ => "<gv>".into(),
         },
         "rv2av" => prefix_deref('@', ir, n),
@@ -75,7 +75,7 @@ pub fn render(ir: &SubIr, node: &OpNode) -> String {
         },
         "rv2cv" => match n.kids.first().map(|k| k.skip_null()) {
             Some(k) if k.name == "gv" => match &k.detail {
-                OpDetail::Gv { name, stash } => sigil_gv('&', name, stash.as_deref()),
+                OpDetail::Gv { name, stash } => sigil_gv(ir, '&', name, stash.as_deref()),
                 _ => "<rv2cv>".into(),
             },
             Some(k) => format!("&{{{}}}", render(ir, k)),
@@ -84,7 +84,7 @@ pub fn render(ir: &SubIr, node: &OpNode) -> String {
         "aelemfast" => match &n.detail {
             // the index is embedded in op_private
             OpDetail::Gv { name, stash } => {
-                let base = sigil_gv('$', name, stash.as_deref());
+                let base = sigil_gv(ir, '$', name, stash.as_deref());
                 format!("{}[{}]", base, n.private as i8)
             }
             _ => "<aelemfast>".into(),
@@ -337,31 +337,54 @@ fn escape_str(s: &str, interp: bool) -> String {
     out
 }
 
-fn lit_str(lit: &SvLit) -> String {
+fn lit_str(ir: &SubIr, lit: &SvLit) -> String {
     match lit {
         SvLit::Undef => "undef".into(),
         SvLit::Iv(i) => i.to_string(),
         SvLit::Uv(u) => u.to_string(),
         SvLit::Nv(n) => n.to_string(),
         SvLit::Pv(s) => format!("\"{}\"", escape_str(s, false)),
-        SvLit::RefTo(inner) => format!("\\{}", lit_str(inner)),
+        SvLit::RefTo(inner) => format!("\\{}", lit_str(ir, inner)),
         SvLit::Code => "sub {...}".into(),
-        SvLit::Glob { name, stash } => sigil_gv('*', name, stash.as_deref()),
+        SvLit::Glob { name, stash } => sigil_gv(ir, '*', name, stash.as_deref()),
         SvLit::Other(s) => format!("<{}>", s),
     }
 }
 
-fn sigil_gv(sigil: char, name: &str, stash: Option<&str>) -> String {
+/// Whether a glob named `name` in `stash` is written bare in `ir`'s
+/// package: its own package, or one of the names perl forces into `main`
+/// (`STDERR`, `ENV`, `_`, `^W`, …) when the stash is `main`.
+fn is_local_gv(ir: &SubIr, name: &str, stash: Option<&str>) -> bool {
     match stash {
-        Some("main") | None => format!("{}{}", sigil, name),
-        Some(pkg) => format!("{}{}::{}", sigil, pkg, name),
+        None => true,
+        Some(pkg) if pkg == ir.package_name() => true,
+        Some("main") => forced_main(name),
+        Some(_) => false,
+    }
+}
+
+/// Whether perl forces a glob of this name into `main` whatever package
+/// it is written in (perlvar: `ENV`, `STDERR`, `_`, `^W`, `1`, …), so
+/// that it is written bare everywhere.
+pub fn forced_main(name: &str) -> bool {
+    matches!(name, "ENV" | "INC" | "ARGV" | "ARGVOUT" | "STDIN" | "STDOUT" | "STDERR" | "SIG" | "_")
+        || name.starts_with('^')
+        || (!name.is_empty() && name.chars().all(|c| c.is_ascii_digit()))
+        || (name.len() == 1 && !name.chars().next().unwrap().is_ascii_alphanumeric())
+}
+
+fn sigil_gv(ir: &SubIr, sigil: char, name: &str, stash: Option<&str>) -> String {
+    if is_local_gv(ir, name, stash) {
+        format!("{}{}", sigil, name)
+    } else {
+        format!("{}{}::{}", sigil, stash.unwrap_or("main"), name)
     }
 }
 
 fn prefix_deref(sigil: char, ir: &SubIr, n: &OpNode) -> String {
     match n.kids.first().map(|k| k.skip_null()) {
         Some(k) if k.name == "gv" => match &k.detail {
-            OpDetail::Gv { name, stash } => sigil_gv(sigil, name, stash.as_deref()),
+            OpDetail::Gv { name, stash } => sigil_gv(ir, sigil, name, stash.as_deref()),
             _ => format!("<{}deref>", sigil),
         },
         Some(k) if is_block(k) => format!("{}{{{}}}", sigil, block_body(ir, k)),
@@ -553,7 +576,7 @@ fn render_print(ir: &SubIr, n: &OpNode) -> String {
         match fh.kids.first().map(|k| k.skip_null()) {
             Some(k) if k.name == "gv" => match &k.detail {
                 OpDetail::Gv { name, stash } => {
-                    out.push_str(&sigil_gv_bare(name, stash.as_deref()))
+                    out.push_str(&sigil_gv_bare(ir, name, stash.as_deref()))
                 }
                 _ => out.push_str("<fh>"),
             },
@@ -577,10 +600,11 @@ fn render_print(ir: &SubIr, n: &OpNode) -> String {
     out
 }
 
-fn sigil_gv_bare(name: &str, stash: Option<&str>) -> String {
-    match stash {
-        Some("main") | None => name.to_string(),
-        Some(pkg) => format!("{}::{}", pkg, name),
+fn sigil_gv_bare(ir: &SubIr, name: &str, stash: Option<&str>) -> String {
+    if is_local_gv(ir, name, stash) {
+        name.to_string()
+    } else {
+        format!("{}::{}", stash.unwrap_or("main"), name)
     }
 }
 
@@ -805,7 +829,7 @@ fn render_call(ir: &SubIr, n: &OpNode) -> String {
                 "null" => scan(ir, k, args, callee, method),
                 "gv" => {
                     if let OpDetail::Gv { name, stash } = &k.detail {
-                        *callee = Some(sigil_gv_bare(name, stash.as_deref()));
+                        *callee = Some(sigil_gv_bare(ir, name, stash.as_deref()));
                     }
                 }
                 "method_named" | "method" | "method_super" | "method_redir"

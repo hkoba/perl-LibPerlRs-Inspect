@@ -1301,7 +1301,7 @@ mod tests {
         assert_eq!(p.len(), 2);
         assert_eq!(p[0].kind, "return");
         let texts: Vec<&str> = p[0].stmts.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(texts, ["Fixtures::log_it(\"a\")", "Fixtures::note()"]);
+        assert_eq!(texts, ["log_it(\"a\")", "note()"]);
         assert_eq!(p[1].exprs, ["\"z\""]);
         assert!(p[1].stmts.is_empty(), "trace is restored after the arm");
     }
@@ -1367,7 +1367,7 @@ mod tests {
                 (Some(4), "fallthrough", vec![(0, true)]),
             ]
         );
-        assert_eq!(stmt_texts(&r.logic.paths[1]), ["Fixtures::log_it(\"go\")"]);
+        assert_eq!(stmt_texts(&r.logic.paths[1]), ["log_it(\"go\")"]);
         assert_eq!(r.logic.table.as_ref().unwrap().len(), 2);
     }
 
@@ -1385,7 +1385,7 @@ mod tests {
                 (Some(7), "fallthrough", vec![(0, false)]),
             ]
         );
-        assert_eq!(stmt_texts(&r.logic.paths[0]), ["Fixtures::note()"]);
+        assert_eq!(stmt_texts(&r.logic.paths[0]), ["note()"]);
     }
 
     #[test]
@@ -1405,7 +1405,7 @@ mod tests {
         let r = range(&ir, 9, 10);
         assert_eq!((r.lines, r.snapped, r.tail), ((10, 10), true, true));
         assert_eq!(outcomes(&r.logic), [(Some(10), "implicit", vec![])]);
-        assert_eq!(r.logic.paths[0].exprs, ["Fixtures::finish()"]);
+        assert_eq!(r.logic.paths[0].exprs, ["finish()"]);
     }
 
     #[test]
@@ -1476,7 +1476,7 @@ mod tests {
                 (Some(10), "implicit", vec![(0, false)]),
             ]
         );
-        assert_eq!(stmt_texts(&l.paths[1]), ["Fixtures::log_it(\"a\")", "Fixtures::note()"]);
-        assert_eq!(stmt_texts(&l.paths[2]), ["Fixtures::done()"]);
+        assert_eq!(stmt_texts(&l.paths[1]), ["log_it(\"a\")", "note()"]);
+        assert_eq!(stmt_texts(&l.paths[2]), ["done()"]);
     }
 }

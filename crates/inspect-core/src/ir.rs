@@ -17,6 +17,11 @@ use serde::{Deserialize, Serialize};
 pub struct SubIr {
     /// CvFILE. "(eval N)" for subs that come from eval
     pub file: Option<String>,
+    /// The package the sub was compiled in (the stash of `CvGV`); `None`
+    /// when unknown, which is taken as `main`. Names in that package are
+    /// rendered unqualified, as they are written in the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     /// (min line, max line) over the COPs in the tree
     pub lines: Option<(u32, u32)>,
     /// CvPROTO (not yet supported: always None. Planned for M5)
@@ -271,6 +276,11 @@ pub enum SvLit {
 }
 
 impl SubIr {
+    /// The package names are rendered relative to (see [`SubIr::package`]).
+    pub fn package_name(&self) -> &str {
+        self.package.as_deref().unwrap_or("main")
+    }
+
     /// References to all nodes in pre-order (id order)
     pub fn nodes(&self) -> Vec<&OpNode> {
         let mut acc = Vec::new();
