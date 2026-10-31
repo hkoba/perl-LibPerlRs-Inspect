@@ -54,23 +54,48 @@ fn analyze_logic_range_json(my_perl: &Perl, code: Cv, start: IV, end: IV) -> Res
     serde_json::to_string(&r).map_err(|e| e.to_string())
 }
 
-/// `LibPerlRs::Inspect::analyze_logic_opts_json($coderef, $alias_modifies, $identity)`
+fn logic_opts(alias_modifies: IV, identity: &str, full_trace: IV) -> Result<inspect_core::passes::logic::LogicOpts, String> {
+    use inspect_core::passes::logic::{Identity, LogicOpts};
+    let identity = Identity::parse(identity)
+        .ok_or_else(|| format!("identity must be strict, expr or var, not {identity:?}"))?;
+    Ok(LogicOpts { alias_modifies: alias_modifies != 0, identity, full_trace: full_trace != 0 })
+}
+
+/// `LibPerlRs::Inspect::analyze_logic_opts_json($coderef, $alias_modifies, $identity, $full_trace)`
 /// — the logic (truth table) of the sub with options, as a JSON string.
-/// `$identity` is `strict`, `expr` or `var` (see `Identity`).
+/// `$identity` is `strict`, `expr` or `var` (see `Identity`); `$full_trace`
+/// records every statement on a route (see `LogicOpts::full_trace`).
 #[xs_sub]
 fn analyze_logic_opts_json(
     my_perl: &Perl,
     code: Cv,
     alias_modifies: IV,
     identity: &str,
+    full_trace: IV,
 ) -> Result<String, String> {
-    use inspect_core::passes::logic::{Identity, LogicOpts};
     let ir = inspect_capture::capture_sub(my_perl, code)?;
-    let identity = Identity::parse(identity)
-        .ok_or_else(|| format!("identity must be strict, expr or var, not {identity:?}"))?;
-    let opts = LogicOpts { alias_modifies: alias_modifies != 0, identity };
+    let opts = logic_opts(alias_modifies, identity, full_trace)?;
     let l = inspect_core::passes::logic::analyze_logic_with(&ir, &opts);
     serde_json::to_string(&l).map_err(|e| e.to_string())
+}
+
+/// `LibPerlRs::Inspect::analyze_logic_range_opts_json($coderef, $start, $end, $alias_modifies, $identity, $full_trace)`
+/// — `analyze_logic_range_json` with the options of `analyze_logic_opts_json`.
+#[xs_sub]
+fn analyze_logic_range_opts_json(
+    my_perl: &Perl,
+    code: Cv,
+    start: IV,
+    end: IV,
+    alias_modifies: IV,
+    identity: &str,
+    full_trace: IV,
+) -> Result<String, String> {
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let (lo, hi) = (u32::try_from(start.max(0)).unwrap_or(u32::MAX), u32::try_from(end.max(0)).unwrap_or(u32::MAX));
+    let opts = logic_opts(alias_modifies, identity, full_trace)?;
+    let r = inspect_core::passes::logic::analyze_logic_range_with(&ir, lo..=hi, &opts).map_err(|e| e.to_string())?;
+    serde_json::to_string(&r).map_err(|e| e.to_string())
 }
 
 /// `LibPerlRs::Inspect::analyze($coderef)` — analysis report as a native
@@ -285,6 +310,7 @@ xs_boot! {
         analyze_json,
         analyze,
         analyze_logic_range_json,
+        analyze_logic_range_opts_json,
         analyze_logic_opts_json,
         begin_capture,
         begins,

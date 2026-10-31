@@ -67,10 +67,20 @@
 //! are carried past the branch, together with the statements of each arm,
 //! so a later outcome is reported once per arm route; when that
 //! continuation would fan out into more than `MAX_PATH_SET` conjunctions
-//! the branch literals (and the arm statements) are dropped instead.
-//! Loops are not recorded as statements (their inner branches still are);
-//! a loop body may run zero times, so nothing from inside a loop is
-//! carried past it.
+//! the branch literals are dropped instead and the arm statements are
+//! kept with the dropped literals as their own guard (`StmtRef::when`).
+//! Loops and `eval BLOCK`s are not recorded as statements (their inner
+//! branches still are); a loop body may run zero times, so no literal
+//! from inside a loop is carried past it, and `next` / `last` / `redo`
+//! of a loop inside the walked block end their route inside the body
+//! (the loop, and the block, go on).
+//!
+//! With `WalkOpts::full_trace` every statement on a route is recorded:
+//! the common prefix too, and a loop or eval body as a header statement
+//! (`for my $x (LIST)`, `while (COND)`, `eval`) followed by the body's
+//! statements one level deeper (`StmtRef::depth`), each guarded by the
+//! literals of the body's branches it sits under (a statement on every
+//! route through the body has no guard).
 //!
 //! # Ranges
 //!
@@ -115,7 +125,7 @@ use std::ops::RangeInclusive;
 use serde::{Deserialize, Serialize};
 
 use crate::ir::{OpClass, OpNode, SubIr};
-use crate::render::render;
+use crate::render::{render, render_loop_head};
 
 use super::logic_canon::{self, Canon, Env};
 use super::retspec::{croak_call, return_exprs};
@@ -175,14 +185,29 @@ pub struct PathOutcome {
 }
 
 /// A rendered statement with its source line.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StmtRef {
     pub line: Option<u32>,
     pub text: String,
+    /// Nesting under the header of a loop / `eval BLOCK` whose body was
+    /// recorded as a unit (`full_trace`): 0 on the route itself, 1
+    /// inside such a body, 2 inside a body nested in it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub depth: u32,
+    /// Literals, beyond the path's `when`, under which the statement
+    /// runs: those of a branch inside a recorded body, or of a branch
+    /// whose literals were dropped from `when` for fanning out too much.
+    /// Empty: on this route the statement always runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<CondLit>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// One literal of a path condition: `conds[cond]` has the value `value`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CondLit {
     pub cond: usize,
     pub value: bool,
@@ -262,6 +287,10 @@ pub struct WalkOpts {
     pub alias_modifies: bool,
     /// When two sites are one atom.
     pub identity: Identity,
+    /// Record every statement on a route: those before the first branch
+    /// too, and the bodies of loops and `eval BLOCK`s nested under a
+    /// header statement (see [`StmtRef::depth`]).
+    pub full_trace: bool,
 }
 
 /// Options of [`analyze_logic_with`] / [`analyze_logic_range_with`].
@@ -273,6 +302,9 @@ pub struct LogicOpts {
     /// See [`Identity`].
     #[serde(default)]
     pub identity: Identity,
+    /// See [`WalkOpts::full_trace`].
+    #[serde(default)]
+    pub full_trace: bool,
 }
 
 /// Result of [`analyze_logic_range`].
@@ -327,6 +359,7 @@ pub fn analyze_logic_with(ir: &SubIr, lopts: &LogicOpts) -> LogicSpec {
         loop_control_outcomes: false,
         alias_modifies: lopts.alias_modifies,
         identity: lopts.identity,
+        full_trace: lopts.full_trace,
     };
     analyze_logic_stmts(ir, &statements(ir), &opts)
 }
@@ -343,6 +376,8 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         cur_line: None,
         env: Env::new(opts.identity.tracks_generations()),
         paths: Vec::new(),
+        loop_depth: 0,
+        body_ends: Vec::new(),
     };
     w.walk_top(stmts);
     let table = w.build_table();
@@ -423,7 +458,8 @@ pub fn analyze_logic_range_with(
             tail,
             loop_control_outcomes: true,
             alias_modifies: lopts.alias_modifies,
-        identity: lopts.identity,
+            identity: lopts.identity,
+            full_trace: lopts.full_trace,
         };
         let logic = analyze_logic_stmts(ir, sel, &opts);
         return Ok(RangeLogic {
@@ -566,6 +602,107 @@ fn is_unconditional(path: &PathSet) -> bool {
     path.len() == 1 && path[0].lits.is_empty()
 }
 
+/// `conj` with one more statement recorded on it.
+fn with_stmt(conj: &Conj, line: Option<u32>, text: &str) -> Conj {
+    let mut c = conj.clone();
+    c.stmts.push(StmtRef {
+        line,
+        text: text.to_string(),
+        depth: 0,
+        when: Vec::new(),
+    });
+    c
+}
+
+/// Fold the path set `inner`, derived from `base` by walking a body (a
+/// loop or eval body, or a branch whose fan-out is too large), back onto
+/// `base`: the literals the body added are dropped, and the statements
+/// it recorded are appended to the base conjunction they derive from,
+/// under `head` when there is one (a loop / eval header, one level
+/// deeper). A statement found on every derived conjunction needs no
+/// guard; otherwise it is guarded by the literals of each conjunction it
+/// is on (relative to the base). Order is that of first appearance.
+fn fold(base: &PathSet, inner: Vec<Conj>, head: Option<StmtRef>) -> PathSet {
+    let nest = u32::from(head.is_some());
+    base.iter()
+        .map(|b| {
+            let mut out = b.clone();
+            out.stmts.extend(head.clone());
+            let cs: Vec<&Conj> = inner
+                .iter()
+                .filter(|c| c.lits.starts_with(&b.lits) && c.stmts.starts_with(&b.stmts))
+                .collect();
+            // (statement, guards it was seen under), in order of first appearance
+            let mut groups: Vec<(&StmtRef, Vec<&[CondLit]>)> = Vec::new();
+            for c in &cs {
+                let rel = &c.lits[b.lits.len()..];
+                for s in &c.stmts[b.stmts.len()..] {
+                    match groups.iter_mut().find(|(t, _)| *t == s) {
+                        Some((_, rels)) => {
+                            if !rels.contains(&rel) {
+                                rels.push(rel);
+                            }
+                        }
+                        None => groups.push((s, vec![rel])),
+                    }
+                }
+            }
+            // routes that ended in loop control come last: source order
+            groups.sort_by_key(|(s, _)| s.line);
+            for (s, rels) in groups {
+                let everywhere = cs.iter().all(|c| c.stmts[b.stmts.len()..].contains(s));
+                let guards = if everywhere {
+                    vec![Vec::new()]
+                } else {
+                    merge_guards(rels.into_iter().map(<[CondLit]>::to_vec).collect())
+                };
+                for rel in guards {
+                    let mut when = rel;
+                    when.extend(s.when.iter().copied());
+                    out.stmts.push(StmtRef {
+                        depth: s.depth + nest,
+                        when,
+                        ..s.clone()
+                    });
+                }
+            }
+            out
+        })
+        .collect()
+}
+
+/// Merge guards that differ only in the value of their last literal
+/// (`[a, b]` and `[a, !b]` are `[a]`), repeatedly: the routes through a
+/// body form a decision tree, so sibling routes share a prefix.
+fn merge_guards(mut guards: Vec<Vec<CondLit>>) -> Vec<Vec<CondLit>> {
+    loop {
+        let mut merged = false;
+        'scan: for i in 0..guards.len() {
+            for j in i + 1..guards.len() {
+                let (a, b) = (&guards[i], &guards[j]);
+                let n = a.len();
+                if n == 0 || n != b.len() {
+                    continue;
+                }
+                let (la, lb) = (a[n - 1], b[n - 1]);
+                if a[..n - 1] == b[..n - 1] && la.cond == lb.cond && la.value != lb.value {
+                    let prefix = a[..n - 1].to_vec();
+                    guards.remove(j);
+                    guards.remove(i);
+                    if !guards.contains(&prefix) {
+                        guards.push(prefix);
+                    }
+                    merged = true;
+                    break 'scan;
+                }
+            }
+        }
+        if !merged {
+            return guards;
+        }
+    }
+}
+
 struct Walker<'a> {
     ir: &'a SubIr,
     opts: WalkOpts,
@@ -580,6 +717,12 @@ struct Walker<'a> {
     /// Generations of the variables modified so far.
     env: Env,
     paths: Vec<PathOutcome>,
+    /// Loops being walked (loop control inside one ends the route in the
+    /// body; the loop itself goes on).
+    loop_depth: u32,
+    /// Per loop being walked: the conjunctions whose route ended in a
+    /// `next` / `last` / `redo` of that loop.
+    body_ends: Vec<Vec<Conj>>,
 }
 
 impl<'a> Walker<'a> {
@@ -616,9 +759,13 @@ impl<'a> Walker<'a> {
                     if set.is_empty() {
                         return None;
                     }
-                    if set.len() <= MAX_PATH_SET {
-                        path = set;
-                    }
+                    path = if set.len() <= MAX_PATH_SET {
+                        set
+                    } else {
+                        // too many routes to carry: drop the branch
+                        // literals, keep the arm statements (guarded)
+                        fold(&path, set, None)
+                    };
                 }
                 Flow::Continue => {}
             }
@@ -652,6 +799,15 @@ impl<'a> Walker<'a> {
                 self.emit(line, "exit", exprs, path);
                 Flow::Terminates
             }
+            "next" | "last" | "redo" if self.loop_depth > 0 => {
+                // control of a loop inside the block: the route ends
+                // here, the loop (and the block) goes on
+                self.note_mods(n);
+                let text = render(self.ir, node);
+                let ends = self.body_ends.last_mut().expect("inside a loop");
+                ends.extend(path.iter().map(|c| with_stmt(c, line, &text)));
+                Flow::Terminates
+            }
             "next" | "last" | "redo" if self.opts.loop_control_outcomes => {
                 self.note_mods(n);
                 let exprs = return_exprs(self.ir, n);
@@ -680,13 +836,19 @@ impl<'a> Walker<'a> {
                 // eval BLOCK: a die inside is caught, so the outside
                 // always continues.
                 let stmts = block_statements(n, line);
-                self.walk_block(&stmts, path, false);
-                Flow::Continue
+                let rem = self.walk_block(&stmts, path, false);
+                if !self.opts.full_trace {
+                    return Flow::Continue;
+                }
+                let head = StmtRef {
+                    line,
+                    text: "eval".into(),
+                    depth: 0,
+                    when: Vec::new(),
+                };
+                Flow::ContinueWith(fold(path, rem.unwrap_or_default(), Some(head)))
             }
-            "leaveloop" => {
-                self.walk_loop(line, n, path);
-                Flow::Continue
-            }
+            "leaveloop" => self.walk_loop(line, n, path),
             _ => self.plain_stmt(line, node, path, tail),
         }
     }
@@ -701,7 +863,7 @@ impl<'a> Walker<'a> {
 
     /// A plain statement: in tail position it is the implicit return
     /// value; otherwise it is recorded on every route of the path set when
-    /// the set is conditional.
+    /// the set is conditional (always, with `full_trace`).
     fn plain_stmt(
         &mut self,
         line: Option<u32>,
@@ -712,20 +874,10 @@ impl<'a> Walker<'a> {
         if tail {
             self.emit_value(line, "implicit", node, path);
             Flow::Continue
-        } else if !is_unconditional(path) {
+        } else if self.opts.full_trace || !is_unconditional(path) {
             self.note_mods(node);
             let text = render(self.ir, node);
-            let set = path
-                .iter()
-                .map(|c| {
-                    let mut c = c.clone();
-                    c.stmts.push(StmtRef {
-                        line,
-                        text: text.clone(),
-                    });
-                    c
-                })
-                .collect();
+            let set = path.iter().map(|c| with_stmt(c, line, &text)).collect();
             Flow::ContinueWith(set)
         } else {
             self.note_mods(node);
@@ -852,32 +1004,52 @@ impl<'a> Walker<'a> {
 
     /// leaveloop: the loop control (iterator / continuation condition) is
     /// not an atom; only branches in the body are collected. The body may
-    /// run zero times, so it never terminates the enclosing block and
-    /// nothing from inside it is carried past the loop.
-    fn walk_loop(&mut self, line: Option<u32>, n: &'a OpNode, path: &PathSet) {
+    /// run zero times, so it never terminates the enclosing block and no
+    /// literal from inside it is carried past the loop. With `full_trace`
+    /// the body's statements are folded under a header statement.
+    fn walk_loop(&mut self, line: Option<u32>, n: &'a OpNode, path: &PathSet) -> Flow {
         // A body atom is evaluated once per iteration: with a modification
         // anywhere in the loop, the atoms before, inside and after it may
         // all see different values.
         self.note_mods(n);
-        self.walk_loop_kids(line, n, path);
+        self.loop_depth += 1;
+        self.body_ends.push(Vec::new());
+        let mut inner = self.walk_loop_kids(line, n, path);
+        inner.extend(self.body_ends.pop().unwrap_or_default());
+        self.loop_depth -= 1;
         self.note_mods(n);
+        if !self.opts.full_trace {
+            return Flow::Continue;
+        }
+        let head = StmtRef {
+            line,
+            text: render_loop_head(self.ir, n),
+            depth: 0,
+            when: Vec::new(),
+        };
+        Flow::ContinueWith(fold(path, inner, Some(head)))
     }
 
-    fn walk_loop_kids(&mut self, line: Option<u32>, n: &'a OpNode, path: &PathSet) {
+    /// Walk the body of a loop; returns the routes surviving it.
+    fn walk_loop_kids(&mut self, line: Option<u32>, n: &'a OpNode, path: &PathSet) -> Vec<Conj> {
+        let mut out = Vec::new();
         for k in &n.kids {
             let s = k.skip_null();
             match s.name.as_str() {
                 "enteriter" | "enterloop" => {}
                 "and" | "or" => {
                     if let Some(body) = s.kids.get(1) {
-                        self.walk_arm(Some(body), line, path, false);
+                        out.extend(self.walk_arm(Some(body), line, path, false).unwrap_or_default());
                     }
                 }
-                _ => {
-                    self.walk_stmt(line, k, path, false);
-                }
+                _ => match self.walk_stmt(line, k, path, false) {
+                    Flow::Continue => out.extend(path.iter().cloned()),
+                    Flow::ContinueWith(set) => out.extend(set),
+                    Flow::Terminates => {}
+                },
             }
         }
+        out
     }
 
     /// Record a value-position expression: decomposed into one outcome per
@@ -1447,6 +1619,147 @@ mod tests {
         // whole-sub mode keeps loop control as plain statements
         let whole = analyze_logic(&ir);
         assert_eq!(outcomes(&whole), [(Some(9), "return", vec![])]);
+    }
+
+    const RANGE_TRACE: &str = include_str!("../../../../t/golden/5.42-threaded/range_trace.json");
+    const TRACE_FANOUT: &str = include_str!("../../../../t/golden/5.42-threaded/trace_fanout.json");
+
+    /// `(line, depth, text, when)` of each recorded statement.
+    fn trace(p: &PathOutcome) -> Vec<(Option<u32>, u32, &str, Vec<(usize, bool)>)> {
+        p.stmts
+            .iter()
+            .map(|s| {
+                let when = s.when.iter().map(|l| (l.cond, l.value)).collect();
+                (s.line, s.depth, s.text.as_str(), when)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn full_trace_records_prefix_loops_and_evals() {
+        // sub {
+        //  my ($x, @items) = @_;        2
+        //  setup();                     3
+        //  return 0 unless $x;          4
+        //  my $n = 0;                   5
+        //  for my $it (@items) {        6
+        //   next unless $it;            7
+        //   tally($it);                 8
+        //   last if $it eq "stop";      9
+        //   $n++;                       10
+        //  }
+        //  eval { risky() };            12
+        //  return $n;                   13
+        // }
+        let ir = ir_of(RANGE_TRACE);
+        let opts = LogicOpts {
+            full_trace: true,
+            ..Default::default()
+        };
+        let r = analyze_logic_range_with(&ir, 1..=100, &opts).unwrap();
+        assert_eq!(r.logic.conds, ["$x", "$it", "$it eq \"stop\""]);
+        assert_eq!(
+            outcomes(&r.logic),
+            [
+                (Some(4), "return", vec![(0, false)]),
+                (Some(13), "return", vec![(0, true)]),
+            ],
+            "loop control of a loop inside the range is not an outcome"
+        );
+        let p = &r.logic.paths;
+        assert_eq!(
+            trace(&p[0]),
+            [
+                (Some(2), 0, "my ($x, @items) = @_", vec![]),
+                (Some(3), 0, "setup()", vec![]),
+            ],
+            "the prefix is recorded"
+        );
+        assert_eq!(
+            trace(&p[1]),
+            [
+                (Some(2), 0, "my ($x, @items) = @_", vec![]),
+                (Some(3), 0, "setup()", vec![]),
+                (Some(5), 0, "my $n = 0", vec![]),
+                (Some(6), 0, "for my $it (@items)", vec![]),
+                (Some(7), 1, "next", vec![(1, false)]),
+                (Some(8), 1, "tally($it)", vec![(1, true)]),
+                (Some(9), 1, "last", vec![(1, true), (2, true)]),
+                (Some(10), 1, "++$n", vec![(1, true), (2, false)]),
+                (Some(12), 0, "eval", vec![]),
+                (Some(12), 1, "risky()", vec![]),
+            ],
+            "loop and eval bodies nest under their header, guarded by the body's branches"
+        );
+        // without full_trace: the prefix and the bodies are left out, but
+        // loop control still ends its route inside the loop
+        let r = range(&ir, 1, 100);
+        assert_eq!(
+            outcomes(&r.logic),
+            [
+                (Some(4), "return", vec![(0, false)]),
+                (Some(13), "return", vec![(0, true)]),
+            ]
+        );
+        assert_eq!(stmt_texts(&r.logic.paths[1]), ["my $n = 0"]);
+        // a range inside the body: its loop control leaves the range
+        let r = range(&ir, 7, 10);
+        assert_eq!(
+            outcomes(&r.logic),
+            [
+                (Some(7), "next", vec![(0, false)]),
+                (Some(9), "last", vec![(0, true), (1, true)]),
+                (Some(10), "fallthrough", vec![(0, true), (1, false)]),
+            ]
+        );
+        assert_eq!(trace(&r.logic.paths[1]), [(Some(8), 0, "tally($it)", vec![])]);
+    }
+
+    #[test]
+    fn fold_overflow_keeps_arm_statements() {
+        // sub { my ($a, ..., $g) = @_; s1() if $a; ... s7() if $g; return done() }
+        let ir = ir_of(TRACE_FANOUT);
+        let l = analyze_logic(&ir);
+        assert_eq!(l.conds.len(), 7);
+        // six guards fan out to 64 routes; the seventh is folded
+        assert_eq!(l.paths.len(), 64);
+        assert!(l.paths.iter().all(|p| p.when.len() == 6 && p.kind == "return"));
+        let first = &l.paths[0];
+        assert_eq!(whens(first), [(0, true), (1, true), (2, true), (3, true), (4, true), (5, true)]);
+        assert_eq!(
+            trace(first),
+            [
+                (Some(1), 0, "s1()", vec![]),
+                (Some(1), 0, "s2()", vec![]),
+                (Some(1), 0, "s3()", vec![]),
+                (Some(1), 0, "s4()", vec![]),
+                (Some(1), 0, "s5()", vec![]),
+                (Some(1), 0, "s6()", vec![]),
+                (Some(1), 0, "s7()", vec![(6, true)]),
+            ],
+            "the folded arm's statement keeps its guard"
+        );
+        let last = l.paths.last().unwrap();
+        assert_eq!(trace(last), [(Some(1), 0, "s7()", vec![(6, true)])]);
+    }
+
+    #[test]
+    fn merge_guards_joins_siblings() {
+        let lit = |cond, value| CondLit { cond, value };
+        assert_eq!(
+            merge_guards(vec![vec![lit(1, true), lit(2, false)], vec![lit(1, true), lit(2, true)]]),
+            [vec![lit(1, true)]]
+        );
+        assert_eq!(
+            merge_guards(vec![vec![lit(1, true)], vec![lit(1, false)]]),
+            [vec![]],
+            "both values of the only literal: no guard"
+        );
+        assert_eq!(
+            merge_guards(vec![vec![lit(1, true), lit(2, false)], vec![lit(1, false)]]),
+            [vec![lit(1, true), lit(2, false)], vec![lit(1, false)]],
+            "different prefixes stay apart"
+        );
     }
 
     #[test]

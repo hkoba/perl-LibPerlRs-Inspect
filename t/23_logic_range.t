@@ -115,6 +115,53 @@ PERL
         'next / last / fall-through';
 };
 
+# [line, depth, text, when] of each recorded statement
+sub trace {
+    my ($p) = @_;
+    [map { [$_->{line}, $_->{depth} // 0, $_->{text}, whens({when => $_->{when} // []})] } @{$p->{stmts}}];
+}
+
+subtest 'full trace of a block with a loop and an eval' => sub {
+    my $code = compile(<<'PERL');
+sub {
+ my ($x, @items) = @_;
+ setup();
+ return 0 unless $x;
+ my $n = 0;
+ for my $it (@items) {
+  next unless $it;
+  tally($it);
+  last if $it eq "stop";
+  $n++;
+ }
+ eval { risky() };
+ return $n;
+}
+PERL
+    my $r = LibPerlRs::Inspect::analyze_logic_range_opts($code, 1, 100, {full_trace => 1});
+    is_deeply $r->{logic}{conds}, ['$x', '$it', '$it eq "stop"'], 'atoms, the loop body ones included';
+    is_deeply outcomes($r->{logic}), [[4, 'return', [[0, 0]]], [13, 'return', [[0, 1]]]],
+        'loop control inside the loop is not an outcome of the range';
+    is_deeply trace($r->{logic}{paths}[0]),
+        [[2, 0, 'my ($x, @items) = @_', []], [3, 0, 'setup()', []]], 'the prefix';
+    is_deeply trace($r->{logic}{paths}[1]), [
+        [2, 0, 'my ($x, @items) = @_', []],
+        [3, 0, 'setup()', []],
+        [5, 0, 'my $n = 0', []],
+        [6, 0, 'for my $it (@items)', []],
+        [7, 1, 'next', [[1, 0]]],
+        [8, 1, 'tally($it)', [[1, 1]]],
+        [9, 1, 'last', [[1, 1], [2, 1]]],
+        [10, 1, '++$n', [[1, 1], [2, 0]]],
+        [12, 0, 'eval', []],
+        [12, 1, 'risky()', []],
+    ], 'bodies nest under their header, guarded by the body branches';
+    my $plain = LibPerlRs::Inspect::analyze_logic_range($code, 1, 100);
+    is_deeply outcomes($plain->{logic}), outcomes($r->{logic}), 'same outcomes without full_trace';
+    is_deeply [map { $_->{text} } @{$plain->{logic}{paths}[1]{stmts}}], ['my $n = 0'],
+        'without full_trace only the conditional statement outside the loop';
+};
+
 subtest 'no statement on the lines' => sub {
     my $r = eval { LibPerlRs::Inspect::analyze_logic_range($guard, 11, 12) };
     like $@, qr/no statement on lines 11-12/, 'dies with the range';

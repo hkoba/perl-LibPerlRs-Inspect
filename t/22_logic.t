@@ -242,4 +242,12 @@ subtest 'common prefix is not recorded' => sub {
     is_deeply stmts($_), [], "no stmts for $_->{exprs}[0]" for @{$l->{paths}};
 };
 
+subtest 'full_trace records the common prefix' => sub {
+    my $code = eval 'sub { my ($x) = @_; setup(); if ($x) { "a" } else { "b" } }' or die $@;
+    my $l = LibPerlRs::Inspect::analyze_logic_opts($code, {full_trace => 1});
+    is_deeply stmts($_), ['my ($x) = @_', 'setup()'], "prefix for $_->{exprs}[0]" for @{$l->{paths}};
+    ok !exists $l->{paths}[0]{stmts}[0]{depth}, 'depth 0 is left out';
+    ok !exists $l->{paths}[0]{stmts}[0]{when}, 'an unguarded statement has no when';
+};
+
 done_testing;

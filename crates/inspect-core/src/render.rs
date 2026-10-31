@@ -249,6 +249,18 @@ pub fn render(ir: &SubIr, node: &OpNode) -> String {
             }
         }
         "leavetry" => format!("eval {{ {} }}", block_body(ir, n)),
+        "next" | "last" | "redo" => match real_kids(n).first() {
+            // the label is a constant string
+            Some(k) => match &k.detail {
+                OpDetail::Const(SvLit::Pv(label)) => format!("{} {}", n.name, label),
+                _ => format!("{} {}", n.name, render(ir, k)),
+            },
+            None => n.name.clone(),
+        },
+        "leaveloop" => {
+            let body = loop_body(n).map(|b| block_body(ir, b)).unwrap_or_default();
+            format!("{} {{ {} }}", render_loop_head(ir, n), body)
+        }
         "scope" | "leave" => format!("do {{ {} }}", block_body(ir, n)),
         // the artificial wrapper around an elsif condition
         "lineseq" => block_body(ir, n),
@@ -438,6 +450,64 @@ fn block_stmts(n: &OpNode) -> Vec<&OpNode> {
             k.class != OpClass::Cop && !matches!(k.name.as_str(), "enter" | "entertry" | "unstack")
         })
         .collect()
+}
+
+/// The header of a loop statement (`leaveloop`): `for my $x (LIST)`,
+/// `for $g (LIST)`, `for (LIST)`, `while (COND)`, `until (COND)`, or
+/// `for (;;)` when there is no condition.
+pub fn render_loop_head(ir: &SubIr, n: &OpNode) -> String {
+    let n = n.skip_null();
+    let kids: Vec<&OpNode> = n.kids.iter().map(|k| k.skip_null()).collect();
+    if let Some(it) = kids.iter().find(|k| k.name == "enteriter") {
+        let mut parts = real_kids(it);
+        // the iterator variable: the pad (targ), else the last kid names
+        // a glob (`for $g`, or `*_` for the default) or an outer lexical
+        let var = if it.targ != 0 {
+            Some(format!("my {}", pad_var(ir, it.targ)))
+        } else if parts.len() >= 2 {
+            let v = parts.pop().unwrap();
+            let gv = if v.name == "rv2gv" { v.kids.first().map(|k| k.skip_null()) } else { Some(v) };
+            match gv {
+                Some(g) if g.name == "gv" => match &g.detail {
+                    OpDetail::Gv { name, .. } if name == "_" => None,
+                    OpDetail::Gv { name, stash } => Some(sigil_gv(ir, '$', name, stash.as_deref())),
+                    _ => None,
+                },
+                Some(other) => Some(render(ir, other)),
+                None => None,
+            }
+        } else {
+            None
+        };
+        // `for (MIN .. MAX)` iterates the range itself: the list is the
+        // two bounds under OPf_STACKED (B::Deparse pp_leaveloop)
+        let bounds = parts.first().map(|k| real_kids(k)).unwrap_or_default();
+        let list = if it.flags & OPF_STACKED != 0 && parts.len() == 1 && bounds.len() == 2 {
+            format!("{} .. {}", render(ir, bounds[0]), render(ir, bounds[1]))
+        } else {
+            parts.iter().map(|k| render(ir, k)).collect::<Vec<_>>().join(", ")
+        };
+        return match var {
+            Some(v) => format!("for {v} ({list})"),
+            None => format!("for ({list})"),
+        };
+    }
+    match kids.iter().find(|k| k.name == "and" || k.name == "or") {
+        Some(c) => {
+            let kw = if c.name == "and" { "while" } else { "until" };
+            format!("{kw} ({})", kid_str(ir, c, 0))
+        }
+        None => "for (;;)".into(),
+    }
+}
+
+/// The body block of a loop (`leaveloop`).
+fn loop_body(n: &OpNode) -> Option<&OpNode> {
+    n.kids.iter().map(|k| k.skip_null()).find_map(|s| match s.name.as_str() {
+        "enteriter" | "enterloop" => None,
+        "and" | "or" => s.kids.get(1).map(|b| b.skip_null()),
+        _ => Some(s),
+    })
 }
 
 /// The visible body of a block: its last statement, with `...;` marking
@@ -890,6 +960,21 @@ mod tests {
             "if ($x < 0) { print \"x < 0\" } elsif ($y < 0) { print \"y < 0\" } \
              elsif ($z < 0) { print \"z < 0\" } else { print \"x,y,z >= 0\" }"
         );
+    }
+
+    #[test]
+    fn loop_headers() {
+        // sub { my $sum = 0; $sum += $_ for @_; $sum }
+        let ir = ir_of(include_str!("../../../t/golden/5.42-threaded/foreach_loop.json"));
+        let stmts = crate::passes::statements(&ir);
+        let (_, lp) = stmts[1];
+        assert_eq!(render_loop_head(&ir, lp), "for (@_)");
+        assert!(render(&ir, lp).starts_with("for (@_) { "), "{}", render(&ir, lp));
+        let ir = ir_of(include_str!("../../../t/golden/5.42-threaded/range_trace.json"));
+        let stmts = crate::passes::statements(&ir);
+        let lp = stmts.iter().map(|(_, n)| n.skip_null()).find(|n| n.name == "leaveloop").unwrap();
+        assert_eq!(render_loop_head(&ir, lp), "for my $it (@items)");
+        assert_eq!(render(&ir, lp), "for my $it (@items) { ...; ++$n }");
     }
 
     #[test]

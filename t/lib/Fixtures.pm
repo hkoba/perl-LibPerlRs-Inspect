@@ -31,6 +31,10 @@ our @FIXTURES = (
     [ident_loop_assign => "sub {\n my (\$x, \@a) = \@_;\n return 0 if \$x > 1;\n for my \$i (\@a) {\n  \$x = \$i;\n  return 1 if \$x > 1;\n }\n return 2 if \$x > 1;\n 3;\n}"],
     [ident_elem_assign => "sub {\n my (\%h) = \@_;\n return 1 if \$h{k};\n \$h{k} = 1;\n return 2 if \$h{k};\n 3;\n}"],
     [range_loop_next => "sub {\n my (\@items) = \@_;\n my \$n = 0;\n for my \$it (\@items) {\n  next unless \$it;\n  last if \$it eq \"stop\";\n  \$n++;\n }\n return \$n;\n}"],
+    # Seven independent guards fan out past MAX_PATH_SET (64) routes
+    [trace_fanout => 'sub { my ($a, $b, $c, $d, $e, $f, $g) = @_; s1() if $a; s2() if $b; s3() if $c; s4() if $d; s5() if $e; s6() if $f; s7() if $g; return done() }'],
+    # Full trace (logic full_trace): prefix, loop body, eval body
+    [range_trace => "sub {\n my (\$x, \@items) = \@_;\n setup();\n return 0 unless \$x;\n my \$n = 0;\n for my \$it (\@items) {\n  next unless \$it;\n  tally(\$it);\n  last if \$it eq \"stop\";\n  \$n++;\n }\n eval { risky() };\n return \$n;\n}"],
 );
 
 sub compile {

@@ -49,11 +49,28 @@ sub analyze_logic_range {
 #                         for its variable: `defined($x = a())`,
 #                         `defined($x = b())` and `defined($x)` are one
 #                         condition, shown as `defined($x)`
+#   full_trace => 1       record every statement on a route: those before
+#                         the first branch too, and the bodies of loops and
+#                         eval blocks nested under a header statement (with
+#                         `depth` and, for a statement inside a branch of the
+#                         body, its own `when`)
 sub analyze_logic_opts {
     my ($code, $opts) = @_;
     $opts ||= {};
-    $_json->decode(analyze_logic_opts_json($code, $opts->{alias_modifies} ? 1 : 0,
-                                           $opts->{identity} // 'strict'));
+    $_json->decode(analyze_logic_opts_json($code, _logic_opt_args($opts)));
+}
+
+sub _logic_opt_args {
+    my ($opts) = @_;
+    ($opts->{alias_modifies} ? 1 : 0, $opts->{identity} // 'strict', $opts->{full_trace} ? 1 : 0);
+}
+
+# analyze_logic_range with the options of analyze_logic_opts.
+sub analyze_logic_range_opts {
+    my ($code, $start, $end, $opts) = @_;
+    $end = $start unless defined $end;
+    $opts ||= {};
+    $_json->decode(analyze_logic_range_opts_json($code, $start, $end, _logic_opt_args($opts)));
 }
 
 # analyze() returns a native hashref directly from the XS side (no JSON round trip).
