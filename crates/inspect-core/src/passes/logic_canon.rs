@@ -430,6 +430,35 @@ pub(crate) fn display(ir: &SubIr, opts: &WalkOpts, node: &OpNode) -> String {
     render(ir, &collapse_assigns(node))
 }
 
+/// The negation of a comparison atom, written with the opposite operator
+/// (`$x >= 0` for `$x < 0`, `$s ne "a"` for `$s eq "a"`, `$s !~ /re/` for
+/// a match); `None` for anything else, which is negated with `!`.
+pub(crate) fn negation(ir: &SubIr, opts: &WalkOpts, node: &OpNode) -> Option<String> {
+    let n = node.skip_null();
+    let name = n.name.strip_prefix("i_").unwrap_or(&n.name);
+    let op = match name {
+        "lt" => ">=",
+        "gt" => "<=",
+        "le" => ">",
+        "ge" => "<",
+        "eq" => "!=",
+        "ne" => "==",
+        "slt" => "ge",
+        "sgt" => "le",
+        "sle" => "gt",
+        "sge" => "lt",
+        "seq" => "ne",
+        "sne" => "eq",
+        "match" => {
+            let s = display(ir, opts, n);
+            return s.contains(" =~ ").then(|| s.replacen(" =~ ", " !~ ", 1));
+        }
+        _ => return None,
+    };
+    let (l, r) = (n.kids.first()?, n.kids.get(1)?);
+    Some(format!("{} {op} {}", display(ir, opts, l), display(ir, opts, r)))
+}
+
 fn collapse_assigns(node: &OpNode) -> OpNode {
     let n = node.skip_null();
     match n.name.as_str() {

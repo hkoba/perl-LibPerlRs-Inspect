@@ -45,6 +45,7 @@ subtest 'length($s) < 8 and length($s) >= 8 are one atom' => sub {
     is_deeply $l->{conds}, ['length($s) < 8'], 'first spelling names the column';
     is_deeply site_negs($l, 0), [0, 1], 'second site is negated';
     is $l->{cond_sites}[0][1]{text}, 'length($s) >= 8', 'site text';
+    is_deeply $l->{cond_negs}, ['length($s) >= 8'], 'the negation spelled with the opposite operator';
     is_deeply [map { [$_->{exprs}[0], whens($_)] } @{$l->{paths}}],
         [['"short"', [[0, 1]]], ['"ok"', [[0, 0]]]], 'ok when !(length < 8); "x" unreachable';
     ok !(grep { !defined $_->{path} } @{$l->{table}}), 'no row without an outcome';

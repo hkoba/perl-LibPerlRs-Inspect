@@ -153,6 +153,12 @@ pub struct LogicSpec {
     /// text appears more than once.
     #[serde(default)]
     pub cond_sites: Vec<Vec<CondSite>>,
+    /// The negation of each condition written with the opposite
+    /// comparison operator (`$x >= 0` for `$x < 0`, `$s ne "a"`,
+    /// `$s !~ /re/`), when the condition is such a comparison
+    /// (index-parallel to `conds`; `None` otherwise).
+    #[serde(default)]
+    pub cond_negs: Vec<Option<String>>,
 }
 
 /// An occurrence of an atom: the op node and the line of its statement.
@@ -373,6 +379,7 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         keys: Vec::new(),
         col_neg: Vec::new(),
         cond_sites: Vec::new(),
+        cond_negs: Vec::new(),
         cur_line: None,
         env: Env::new(opts.identity.tracks_generations()),
         paths: Vec::new(),
@@ -386,6 +393,7 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         paths: w.paths,
         table,
         cond_sites: w.cond_sites,
+        cond_negs: w.cond_negs,
     }
 }
 
@@ -712,6 +720,7 @@ struct Walker<'a> {
     /// The column's polarity relative to its key: that of its first site.
     col_neg: Vec<bool>,
     cond_sites: Vec<Vec<CondSite>>,
+    cond_negs: Vec<Option<String>>,
     /// Line of the statement being walked (recorded with each atom).
     cur_line: Option<u32>,
     /// Generations of the variables modified so far.
@@ -1294,10 +1303,17 @@ impl<'a> Walker<'a> {
         let i = match self.keys.iter().position(|k| *k == c.key) {
             Some(i) => i,
             None => {
+                // the node is the atom's own expression unless the atom is
+                // its definedness (`defined(X)` names X's node)
+                let neg = (!text.starts_with("defined("))
+                    .then(|| self.ir.node_by_id(node))
+                    .flatten()
+                    .and_then(|n| logic_canon::negation(self.ir, &self.opts, n));
                 self.conds.push(text.clone());
                 self.keys.push(c.key);
                 self.col_neg.push(c.neg);
                 self.cond_sites.push(Vec::new());
+                self.cond_negs.push(neg);
                 self.conds.len() - 1
             }
         };
@@ -1415,6 +1431,7 @@ mod tests {
         let golden = include_str!("../../../../t/golden/5.42-threaded/ident_range_split.json");
         let l = logic_of(golden);
         assert_eq!(l.conds, ["length($s) < 8"]);
+        assert_eq!(l.cond_negs, [Some("length($s) >= 8".to_string())]);
         let negs: Vec<bool> = l.cond_sites[0].iter().map(|s| s.neg).collect();
         assert_eq!(negs, [false, true]);
         assert_eq!(l.paths.len(), 2);
@@ -1633,6 +1650,17 @@ mod tests {
                 (s.line, s.depth, s.text.as_str(), when)
             })
             .collect()
+    }
+
+    #[test]
+    fn plain_atoms_have_no_negation() {
+        // sub { my ($a, $b, $c) = @_; return ($a && $b) || !$c }
+        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/bool_return.json"));
+        assert_eq!(l.cond_negs, [None, None, None]);
+        // sub { my ($z) = @_; return $z // 0 }: defined($z) names $z's node
+        let l = logic_of(include_str!("../../../../t/golden/5.42-threaded/range_trace.json"));
+        assert_eq!(l.conds, ["$x", "$it", "$it eq \"stop\""]);
+        assert_eq!(l.cond_negs, [None, None, Some("$it ne \"stop\"".to_string())]);
     }
 
     #[test]
