@@ -12,6 +12,7 @@ pub mod packages;
 mod raw;
 pub mod reqtrace;
 pub mod subs;
+pub mod symsrc;
 
 pub use begins::{
     FileBegins, FileUse, enable_begin_capture, file_begins, saved_begins, set_begin_capture,

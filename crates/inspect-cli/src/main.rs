@@ -31,7 +31,8 @@ use libperl_rs::Perl;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: perl-inspect [--deep] [--analyze-prefix=PATH]... <file.pm | -e 'code' | perl args...>\n\
+        "usage: perl-inspect [--deep] [--analyze-prefix=PATH]... [--symexec-helper=NAME]...\n\
+         \x20                   <file.pm | -e 'code' | perl args...>\n\
          \n\
          Compiles the target with an embedded perl (BEGIN/use run, the\n\
          main body does not — same trust model as `perl -c`) and prints\n\
@@ -43,12 +44,16 @@ fn usage() -> ExitCode {
 fn main() -> ExitCode {
     let mut deep = false;
     let mut analyze_prefixes: Vec<String> = Vec::new();
+    let mut symexec_helpers: Vec<String> = Vec::new();
     let mut rest: Vec<String> = Vec::new();
     for a in env::args().skip(1) {
         match a.as_str() {
             "--deep" if rest.is_empty() => deep = true,
             _ if rest.is_empty() && a.starts_with("--analyze-prefix=") => {
                 analyze_prefixes.push(a["--analyze-prefix=".len()..].to_string())
+            }
+            _ if rest.is_empty() && a.starts_with("--symexec-helper=") => {
+                symexec_helpers.push(a["--symexec-helper=".len()..].to_string())
             }
             "--help" | "-h" if rest.is_empty() => return usage(),
             _ => rest.push(a),
@@ -82,6 +87,7 @@ fn main() -> ExitCode {
     let mut opts = ReportOpts::default();
     opts.deep = deep;
     opts.analyze_prefixes = analyze_prefixes;
+    opts.symexec_helpers = symexec_helpers;
     let out = inspect_report::report(&perl, &main_file, &opts);
     println!("{}", serde_json::to_string_pretty(&out).expect("serialize"));
     ExitCode::SUCCESS

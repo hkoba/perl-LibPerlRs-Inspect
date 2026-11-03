@@ -48,6 +48,12 @@ our @FIXTURES = (
     [args_elem_after_shift => "sub {\n my \$first = shift;\n return \$_[0] + \$_[1];\n}"],
     # Call sites (passes::callsites)
     [calls_mixed => "sub {\n my (\$o, \@list) = \@_;\n my (\%h, \$cb);\n foo(1, 2);\n Bar::baz(\$o, \@list);\n \$o->meth(a => 1, b => 2);\n Klass->new(\%h);\n &foo;\n foo(\@_);\n &\$cb(3);\n}"],
+    # Argument helpers inlined by passes::symexec (bodies of
+    # MOP4Import::Opts::m4i_opts / m4i_opts_alike / m4i_args, as local subs)
+    [args_helper_m4i_opts => "sub Opts () {'MOP4Import::Opts'}\nsub m4i_opts {\n my (\$arg) = \@_;\n if (not ref \$arg) {\n  Opts->new(caller => \$arg);\n } elsif (UNIVERSAL::isa(\$arg, Opts)) {\n  \$arg\n } elsif (ref \$arg eq 'ARRAY') {\n  Opts->new(caller => \$arg);\n } elsif (ref \$arg eq 'HASH' and m4i_opts_alike(\$arg)) {\n  \$arg;\n } else {\n  Carp::croak('Unknown argument!');\n }\n}\n\\&m4i_opts"],
+    [args_helper_m4i_opts_alike => "sub m4i_opts_alike {\n my (\$arg) = \@_;\n not grep {not exists \$arg->{\$_}} qw(caller callpack filename line)\n}\n\\&m4i_opts_alike"],
+    [args_helper_m4i_args => "sub m4i_args {\n (\$_[0], m4i_opts(\$_[1]), \@_[2..\$#_]);\n}\n\\&m4i_args"],
+    [args_helper_m4i => "sub {\n my (\$pack, \$opts, \@rest) = m4i_args(\@_);\n \$opts->{destpkg} . \$pack . scalar(\@rest)\n}"],
 );
 
 sub compile {

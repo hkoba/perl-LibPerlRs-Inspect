@@ -210,6 +210,27 @@ pub fn view(l: &Sym) -> (Vec<Sym>, Option<Sym>) {
             (items, None)
         }
         Sym::Const(_) | Sym::Ref(_) | Sym::Code(_) | Sym::RefPad { .. } => (vec![l.clone()], None),
+        Sym::Join(alts) => {
+            // alternatives that are lists of one length: a list of joins
+            let views: Vec<(&Vec<Cond>, Vec<Sym>, Option<Sym>)> = alts
+                .iter()
+                .map(|(c, s)| match view(s) {
+                    // a call that was not executed: taken as one value
+                    // next to alternatives of one value
+                    (i, Some(t @ Sym::Call { .. })) if i.is_empty() => (c, vec![t], None),
+                    (i, t) => (c, i, t),
+                })
+                .collect();
+            let n = views.first().map_or(0, |v| v.1.len());
+            if views.iter().all(|(_, i, t)| t.is_none() && i.len() == n) {
+                let items = (0..n)
+                    .map(|k| join_of(views.iter().map(|(c, i, _)| ((*c).clone(), i[k].clone())).collect()))
+                    .collect();
+                (items, None)
+            } else {
+                (Vec::new(), Some(l.clone()))
+            }
+        }
         other => (Vec::new(), Some(other.clone())),
     }
 }

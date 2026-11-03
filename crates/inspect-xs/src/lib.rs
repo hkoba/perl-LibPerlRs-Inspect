@@ -124,6 +124,30 @@ fn analyze(my_perl: &Perl, code: Cv) -> Result<Rv<Hv>, String> {
     Ok(build_hv(my_perl, &map).into_rv(my_perl))
 }
 
+/// `LibPerlRs::Inspect::analyze_with_helpers($coderef, $helpers)` —
+/// [`analyze`] whose argument spec inlines the argument helpers named in
+/// `$helpers` (comma separated, package-qualified; subs of the same home
+/// package are inlined too).
+#[xs_sub]
+fn analyze_with_helpers(my_perl: &Perl, code: Cv, helpers: &str) -> Result<Rv<Hv>, String> {
+    use inspect_core::passes::{argspec, symexec::Limits};
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let names: Vec<String> = helpers
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    let src = inspect_capture::symsrc::PerlSource::new(my_perl, &names);
+    let mut report = inspect_core::passes::analyze(&ir);
+    report.args = argspec::analyze_args_with(&ir, &src, &Limits::default());
+    let value = serde_json::to_value(&report).map_err(|e| e.to_string())?;
+    let Value::Object(map) = value else {
+        return Err("analysis report did not serialize to an object".into());
+    };
+    Ok(build_hv(my_perl, &map).into_rv(my_perl))
+}
+
 /// `LibPerlRs::Inspect::begin_capture($on)` — turn BEGIN capture
 /// (`PL_savebegin`) on or off. BEGIN blocks (including the ones `use`
 /// compiles into) that run while it is on are kept for [`begins`].
@@ -322,6 +346,7 @@ xs_boot! {
         dump_optree,
         analyze_json,
         analyze,
+        analyze_with_helpers,
         check_call_json,
         analyze_logic_range_json,
         analyze_logic_range_opts_json,

@@ -134,6 +134,11 @@ pub struct ReportOpts {
     /// paths. Such subs keep their `imported` provenance. Empty (the
     /// default) analyzes only the compiled file's own subs.
     pub analyze_prefixes: Vec<String>,
+    /// Argument helpers (package-qualified sub names, e.g.
+    /// `CGI::Util::rearrange`) whose bodies the argument analysis
+    /// executes in place of their calls; subs of the same home package
+    /// are executed too.
+    pub symexec_helpers: Vec<String>,
 }
 
 /// Options for [`prepare_with`].
@@ -375,13 +380,16 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> V
                 }
                 m.insert("lexicals".into(), lexicals(&ir.pad));
                 if opts.deep {
-                    let report = inspect_core::passes::analyze(&ir);
+                    let mut report = inspect_core::passes::analyze(&ir);
+                    if !opts.symexec_helpers.is_empty() {
+                        report.args = analyze_args(perl, &ir, opts);
+                    }
                     m.insert(
                         "report".into(),
                         serde_json::to_value(report).expect("serialize report"),
                     );
                 } else {
-                    let args = inspect_core::passes::argspec::analyze_args(&ir);
+                    let args = analyze_args(perl, &ir, opts);
                     m.insert(
                         "args".into(),
                         serde_json::to_value(args).expect("serialize argspec"),
@@ -394,6 +402,20 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> V
         }
     }
     Value::Object(m)
+}
+
+/// The argument spec of `ir`, with `opts.symexec_helpers` inlined.
+fn analyze_args(
+    perl: &Perl,
+    ir: &inspect_core::ir::SubIr,
+    opts: &ReportOpts,
+) -> inspect_core::passes::argspec::ArgSpec {
+    use inspect_core::passes::{argspec, symexec::Limits};
+    if opts.symexec_helpers.is_empty() {
+        return argspec::analyze_args(ir);
+    }
+    let src = inspect_capture::symsrc::PerlSource::new(perl, &opts.symexec_helpers);
+    argspec::analyze_args_with(ir, &src, &Limits::default())
 }
 
 /// The named pad entries of a sub (U2): name, pad index, declarator,

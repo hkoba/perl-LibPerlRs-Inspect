@@ -22,7 +22,7 @@ pub use super::symexec::Norm;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArgSpec {
-    /// signature | unpack | shift | positional | mixed | none
+    /// signature | unpack | shift | positional | helper | mixed | none
     pub style: String,
     pub min_arity: u64,
     /// None = no upper bound (slurpy or unchecked)
@@ -402,6 +402,7 @@ fn named_key(v: &Sym) -> Option<&str> {
     match v {
         Sym::Elem(base, Key::Str(k)) if base.mentions_args() => Some(k),
         Sym::Default { arg, .. } => named_key(arg),
+        Sym::Join(alts) => alts.iter().find_map(|(_, s)| named_key(s)),
         _ => None,
     }
 }
@@ -661,6 +662,7 @@ fn spec_from_summary(ir: &SubIr, sum: &Summary) -> ArgSpec {
             "shift" | "pop" | "splice" => "shift",
             "unpack" => "unpack",
             "elem" => "positional",
+            "helper" => "helper",
             _ => continue,
         };
         if !styles.contains(&st) {
@@ -692,7 +694,17 @@ fn spec_from_summary(ir: &SubIr, sum: &Summary) -> ArgSpec {
         params,
         named,
         forwards,
-        helpers: Vec::new(),
+        helpers: sum
+            .calls
+            .iter()
+            .filter(|c| c.inlined)
+            .map(|c| HelperUse {
+                callee: local_name(ir, &c.callee),
+                line: c.line,
+                inlined: true,
+                note: None,
+            })
+            .collect(),
         checks,
         notes,
     }
@@ -856,6 +868,56 @@ mod tests {
         assert_eq!(param(&s, "$_[0]").alts, [Slot::Front(1)]);
         assert_eq!(param(&s, "$_[1]").alts, [Slot::Front(2)]);
         assert_eq!(s.min_arity, 3);
+    }
+
+    /// Supplies the helper fixtures' bodies by qualified name.
+    struct Helpers(Vec<(&'static str, std::sync::Arc<SubIr>)>);
+
+    impl IrSource for Helpers {
+        fn sub_ir(&self, callee: &str, _: &str) -> Option<std::sync::Arc<SubIr>> {
+            self.0.iter().find(|(n, _)| *n == callee).map(|(_, ir)| ir.clone())
+        }
+        fn canonical_name(&self, _: &str, _: &str) -> Option<String> {
+            None
+        }
+        fn outer_value(&self, _: &str, _: u32) -> Option<Sym> {
+            None
+        }
+    }
+
+    fn m4i_helpers() -> Helpers {
+        let ir = |g: &str| std::sync::Arc::new(ir_of(g));
+        Helpers(vec![
+            ("Fixtures::m4i_args", ir(golden!("args_helper_m4i_args"))),
+            ("Fixtures::m4i_opts", ir(golden!("args_helper_m4i_opts"))),
+            ("Fixtures::m4i_opts_alike", ir(golden!("args_helper_m4i_opts_alike"))),
+        ])
+    }
+
+    #[test]
+    fn helper_m4i_args_inlined() {
+        // my ($pack, $opts, @rest) = m4i_args(@_); $opts->{destpkg} ...
+        let ir = ir_of(golden!("args_helper_m4i"));
+        let s = analyze_args_with(&ir, &m4i_helpers(), &Limits::default());
+        eprintln!("{}", serde_json::to_string_pretty(&s).unwrap());
+        assert_eq!(s.style, "helper");
+        assert_eq!(names(&s), ["$pack", "$opts", "@rest"]);
+        assert_eq!(param(&s, "$pack").alts, [Slot::Front(0)]);
+        assert_eq!(param(&s, "$opts").alts, [Slot::Front(1)]);
+        assert!(param(&s, "$opts").conditional, "an Opts object or $_[1] itself");
+        assert_eq!(param(&s, "@rest").alts, [Slot::Rest(2)]);
+        let h: Vec<(&str, bool)> = s.helpers.iter().map(|h| (h.callee.as_str(), h.inlined)).collect();
+        assert_eq!(h, [("m4i_args", true)]);
+        assert!(s.forwards.is_empty());
+        assert_eq!(key(&s, "destpkg").via.as_deref(), Some("$opts"));
+    }
+
+    #[test]
+    fn helper_without_source_is_a_forward() {
+        let s = spec(golden!("args_helper_m4i"));
+        assert_eq!(s.style, "none");
+        assert_eq!(s.forwards.len(), 1);
+        assert_eq!((s.forwards[0].callee.as_str(), s.forwards[0].kind.as_str()), ("m4i_args", "all"));
     }
 
     #[test]

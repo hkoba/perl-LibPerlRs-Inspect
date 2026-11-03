@@ -184,4 +184,33 @@ subtest 'v2: elements after shift' => sub {
     is $a->{min_arity}, 3, 'min_arity';
 };
 
+subtest 'v2: helper m4i_args inlined' => sub {
+    # the helper fixtures define Fixtures::m4i_opts / m4i_opts_alike / m4i_args
+    Fixtures::compile($_, $fixture{$_})
+        for qw(args_helper_m4i_opts args_helper_m4i_opts_alike args_helper_m4i_args);
+    my $code = Fixtures::compile('args_helper_m4i', $fixture{args_helper_m4i});
+
+    my $plain = LibPerlRs::Inspect::analyze($code)->{args};
+    is_deeply [map { [$_->{callee}, $_->{kind}] } @{$plain->{forwards}}],
+        [['m4i_args', 'all']], 'without helpers: a forward';
+
+    my $a = LibPerlRs::Inspect::analyze_with_helpers($code, 'Fixtures::m4i_args')->{args};
+    is $a->{style}, 'helper', 'style';
+    is_deeply [map { $_->{name} } @{$a->{params}}], ['$pack', '$opts', '@rest'], 'names';
+    is_deeply param($a, '$opts')->{alts}, [{front => 1}], '$opts from $_[1]';
+    ok param($a, '$opts')->{conditional}, '$opts: an Opts object or $_[1]';
+    is_deeply param($a, '@rest')->{alts}, [{rest => 2}], '@rest = @_[2..]';
+    is_deeply [map { $_->{callee} } @{$a->{helpers}}], ['m4i_args'], 'helpers';
+};
+
+subtest 'v2: MOP4Import::Opts::m4i_args (installed module)' => sub {
+    plan skip_all => 'MOP4Import::Opts is not installed'
+        unless eval { require MOP4Import::Opts; 1 };
+    my $code = eval 'package M4iUser; MOP4Import::Opts->import(qw(m4i_args));'
+        . ' sub { my ($pack, $opts, @r) = m4i_args(@_); $opts->{destpkg} }' or die $@;
+    my $a = LibPerlRs::Inspect::analyze_with_helpers($code, 'MOP4Import::Opts::m4i_args')->{args};
+    is_deeply [map { [$_->{name}, $_->{alts}] } @{$a->{params}}],
+        [['$pack', [{front => 0}]], ['$opts', [{front => 1}]], ['@r', [{rest => 2}]]], 'params';
+};
+
 done_testing;

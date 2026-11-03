@@ -2,12 +2,14 @@
 //! forking at symbolic conditions and joining after each compound
 //! statement.
 
+use std::sync::Arc;
+
 use crate::ir::{OpDetail, OpNode, SubIr, SvLit, padname_flags};
 use crate::render::render;
 
 use super::builtins;
 use super::env::{
-    Env, hash_get, join_syms, list_concat, list_drop, list_elem, list_len,
+    Env, Frame, hash_get, join_syms, list_concat, list_drop, list_elem, list_len,
     list_pop, list_shift, mk_list, to_hash, view,
 };
 use super::summary::{Assign, CallEvent, ForwardEvent, Precond, Read, ReadKind, Summary};
@@ -141,7 +143,6 @@ enum Callee<'a> {
 
 pub(crate) struct Exec<'a> {
     ir: &'a SubIr,
-    #[allow(dead_code)]
     src: &'a dyn IrSource,
     limits: &'a Limits,
     steps: u32,
@@ -152,6 +153,12 @@ pub(crate) struct Exec<'a> {
     seq: u32,
     ret_envs: Vec<Env>,
     sum: Summary,
+    /// Bodies of the inlined calls in progress (the IR of the top frame).
+    ir_stack: Vec<Arc<SubIr>>,
+    /// Values and states at the `return`s of each inlined call in progress.
+    inline_rets: Vec<Vec<(Sym, Env)>>,
+    /// Number of calls inlined so far.
+    inlines: u32,
 }
 
 impl<'a> Exec<'a> {
@@ -168,6 +175,9 @@ impl<'a> Exec<'a> {
             loop_depth: 0,
             seq: 0,
             ret_envs: Vec::new(),
+            ir_stack: Vec::new(),
+            inline_rets: Vec::new(),
+            inlines: 0,
             sum: Summary {
                 env,
                 reads: Vec::new(),
@@ -210,6 +220,18 @@ impl<'a> Exec<'a> {
 
     // ---- bookkeeping ----
 
+    /// The IR of the sub being executed (an inlined callee or the
+    /// analyzed sub).
+    fn ir(&self) -> &SubIr {
+        self.ir_stack.last().map_or(self.ir, |a| a)
+    }
+
+    /// Whether execution is in the analyzed sub itself (not in an inlined
+    /// callee): only its reads, assignments and checks are recorded.
+    fn at_top(&self) -> bool {
+        self.env.frames.len() == 1
+    }
+
     fn next_seq(&mut self) -> u32 {
         self.seq += 1;
         self.seq
@@ -220,7 +242,7 @@ impl<'a> Exec<'a> {
     }
 
     fn note_read(&mut self, v: &Sym, kind: ReadKind, via: Option<String>, text: Option<String>) {
-        if !v.mentions_args() {
+        if !v.mentions_args() || !self.at_top() {
             return;
         }
         let seq = self.next_seq();
@@ -248,11 +270,11 @@ impl<'a> Exec<'a> {
     // ---- pads ----
 
     fn pad_entry(&self, targ: u64) -> Option<&crate::ir::PadEntry> {
-        self.ir.pad.iter().find(|e| e.ix as u64 == targ)
+        self.ir().pad.iter().find(|e| e.ix as u64 == targ)
     }
 
     fn pad_name(&self, targ: u64) -> Option<String> {
-        self.ir.pad_name(targ).map(String::from)
+        self.ir().pad_name(targ).map(String::from)
     }
 
     fn pad_default(&self, targ: u64) -> Sym {
@@ -278,7 +300,7 @@ impl<'a> Exec<'a> {
 
     fn pad_set(&mut self, targ: u64, v: Sym, source: &'static str) {
         self.env.top_mut().pads.insert(targ, v.clone());
-        if v.mentions_args() && !self.sum.assigns.iter().any(|a| a.targ == targ) {
+        if v.mentions_args() && self.at_top() && !self.sum.assigns.iter().any(|a| a.targ == targ) {
             let seq = self.next_seq();
             self.sum.assigns.push(Assign {
                 seq,
@@ -295,7 +317,7 @@ impl<'a> Exec<'a> {
     /// ambiguous names give None.
     fn pad_by_name(&self, name: &str) -> Option<u64> {
         let mut it = self
-            .ir
+            .ir()
             .pad
             .iter()
             .filter(|e| e.name.as_deref() == Some(name));
@@ -439,31 +461,43 @@ impl<'a> Exec<'a> {
                 }
             }
             "padsv_store" => {
+                let before = self.inlines;
                 let v = match n.kids.first() {
                     Some(k) => self.eval(k, Want::Scalar),
                     None => Sym::Unknown("padsv_store"),
                 };
-                let src = n.kids.first().map_or("expr", source_of);
+                let src = if self.inlines > before {
+                    "helper"
+                } else {
+                    n.kids.first().map_or("expr", source_of)
+                };
                 self.pad_set(n.targ, v.clone(), src);
                 v
             }
             "sassign" => {
+                let before = self.inlines;
                 let v = match n.kids.first() {
                     Some(k) => self.eval(k, Want::Scalar),
                     None => Sym::Unknown("sassign"),
                 };
                 if let (Some(lhs), Some(rhs)) = (n.kids.get(1), n.kids.first()) {
-                    self.assign(lhs, v.clone(), source_of(rhs));
+                    let src = if self.inlines > before { "helper" } else { source_of(rhs) };
+                    self.assign(lhs, v.clone(), src);
                 }
                 v
             }
             "aassign" => {
+                let before = self.inlines;
                 let rhs = match n.kids.first() {
                     Some(k) => self.eval(k, Want::List),
                     None => Sym::empty(),
                 };
                 if let Some(lhs) = n.kids.get(1) {
-                    let src = if rhs.mentions_args() { "unpack" } else { "expr" };
+                    let src = match (rhs.mentions_args(), self.inlines > before) {
+                        (true, true) => "helper",
+                        (true, false) => "unpack",
+                        _ => "expr",
+                    };
                     self.assign_list(lhs, rhs.clone(), src);
                 }
                 match want {
@@ -530,7 +564,7 @@ impl<'a> Exec<'a> {
                 let ix = n.private as i8 as i64;
                 if is_args_gv(n) {
                     let v = list_elem(&self.env.top().args.clone(), ix);
-                    let text = render(self.ir, n);
+                    let text = render(self.ir(), n);
                     self.note_read(&v, ReadKind::Elem, None, Some(text));
                     v
                 } else {
@@ -559,7 +593,7 @@ impl<'a> Exec<'a> {
                     None => Sym::Elem(Box::new(a), Key::Sym(Box::new(ix))),
                 };
                 if matches!(t, ArrayTarget::Args) {
-                    let text = render(self.ir, n);
+                    let text = render(self.ir(), n);
                     self.note_read(&v, ReadKind::Elem, None, Some(text));
                 }
                 v
@@ -569,7 +603,7 @@ impl<'a> Exec<'a> {
                     return Sym::Unknown("helem");
                 };
                 let h = self.eval(hk, Want::List);
-                let via = pad_via(self.ir, hk);
+                let via = pad_via(self.ir(), hk);
                 let k = self.eval(kk, Want::Scalar);
                 let key = match k.const_str() {
                     Some(s) => Key::Str(s),
@@ -600,7 +634,8 @@ impl<'a> Exec<'a> {
                 let cv = self.eval(c, Want::Scalar);
                 self.fork(cv, |x| x.eval(t, want), |x| x.eval(f, want))
             }
-            "entersub" => self.eval_call(n),
+            "entersub" => self.eval_call(n, want),
+            "aslice" => self.eval_aslice(n, want),
             "goto" => self.eval_goto(n),
             "die" => {
                 self.eval_kids_generic(n);
@@ -610,9 +645,7 @@ impl<'a> Exec<'a> {
             "return" => {
                 let v = self.eval_list(&n.kids, Want::List);
                 if self.dead.is_none() {
-                    self.sum.returns.push(v.clone());
-                    self.ret_envs.push(self.env.clone());
-                    self.dead = Some(Dead::Return);
+                    self.leave_with(v.clone());
                 }
                 v
             }
@@ -935,7 +968,7 @@ impl<'a> Exec<'a> {
     fn lookup(&mut self, h: &Sym, key: &Key, via: Option<String>, n: &OpNode) -> Sym {
         let mut defaults: Vec<(Sym, Sym)> = Vec::new();
         let v = hash_get(h, key, &mut |arg, d| defaults.push((arg.clone(), d.clone())));
-        let text = Some(render(self.ir, n));
+        let text = Some(render(self.ir(), n));
         for (arg, d) in defaults {
             self.note_read(&arg, ReadKind::Default(d), via.clone(), text.clone());
         }
@@ -980,7 +1013,7 @@ impl<'a> Exec<'a> {
         let mut cur: Option<Sym> = None;
         let mut via: Option<String> = None;
         let mut args_base = false;
-        let text = render(self.ir, n);
+        let text = render(self.ir(), n);
         let mut last_kind = ReadKind::Key;
         for st in steps {
             let array = st.container == "array";
@@ -1225,7 +1258,7 @@ impl<'a> Exec<'a> {
         ef.conds.pop();
 
         for (dead, keep) in [(dt, &cf), (df, &ct)] {
-            if let Some(d) = dead {
+            if let (Some(d), true) = (dead, self.at_top()) {
                 self.sum.preconds.push(Precond {
                     cond: keep.clone(),
                     line,
@@ -1500,7 +1533,7 @@ impl<'a> Exec<'a> {
         }
     }
 
-    fn eval_call(&mut self, n: &OpNode) -> Sym {
+    fn eval_call(&mut self, n: &OpNode, want: Want) -> Sym {
         let (arg_nodes, callee) = self.call_parts(n);
         let mut parts = Vec::new();
         for a in &arg_nodes {
@@ -1520,6 +1553,12 @@ impl<'a> Exec<'a> {
         if self.dead.is_some() {
             return Sym::Unknown("dead");
         }
+        let pkg = self.ir().package_name().to_string();
+        let name = if method {
+            name
+        } else {
+            self.src.canonical_name(&name, &pkg).unwrap_or(name)
+        };
         if !method && is_die_sub(&name) {
             self.dead = Some(Dead::Die);
             return Sym::Unknown("die");
@@ -1538,33 +1577,162 @@ impl<'a> Exec<'a> {
                 })
                 .map(|(f, _)| (if f == 0 { "all" } else { "rest" }, f))
         };
-        if let Some((kind, from)) = forward {
-            self.sum.forwards.push(ForwardEvent {
-                callee: name.clone(),
-                line: self.line,
-                kind,
-                from,
-                method,
-            });
-        }
-        let all = list_concat(parts);
+        let all = if amper {
+            cur_args.clone()
+        } else {
+            list_concat(parts)
+        };
         let (mut args, tail) = view(&all);
-        if amper {
-            args = vec![cur_args];
-        } else if let Some(t) = tail {
+        if let Some(t) = tail {
             args.push(t);
         }
-        self.sum.calls.push(CallEvent {
-            callee: name.clone(),
-            args: args.clone(),
-            line: self.line,
-            method,
-            inlined: false,
-        });
+        if !method && name == "UNIVERSAL::isa" {
+            return builtins::apply("isa", args);
+        }
+
+        // inline the callee when the source supplies its body
+        let inline_ir = if method
+            || self.env.frames.len() > self.limits.inline_depth as usize
+            || self.env.frames.iter().any(|f| f.callee == name)
+        {
+            None
+        } else {
+            self.src.sub_ir(&name, &pkg)
+        };
+        if self.at_top() {
+            if let (Some((kind, from)), None) = (forward, &inline_ir) {
+                self.sum.forwards.push(ForwardEvent {
+                    callee: name.clone(),
+                    line: self.line,
+                    kind,
+                    from,
+                    method,
+                });
+            }
+            self.sum.calls.push(CallEvent {
+                callee: name.clone(),
+                args: args.clone(),
+                line: self.line,
+                method,
+                inlined: inline_ir.is_some(),
+            });
+        }
+        if let Some(cir) = inline_ir {
+            return self.inline(cir, name, all, want);
+        }
         Sym::Call {
             callee: name,
             args,
             method,
+        }
+    }
+
+    /// Execute the body of a callee in a new frame whose `@_` is `args`;
+    /// the value is the join of its `return`s and its last statement.
+    fn inline(&mut self, cir: Arc<SubIr>, callee: String, args: Sym, want: Want) -> Sym {
+        self.inlines += 1;
+        let width = self.limits.join_width;
+        let base_conds = self.env.conds.len();
+        let line = self.line;
+        self.env.frames.push(Frame {
+            pads: Default::default(),
+            args,
+            callee,
+        });
+        self.ir_stack.push(cir.clone());
+        self.inline_rets.push(Vec::new());
+        let v = match crate::passes::body(&cir) {
+            Some(b) => self.eval_block(b, Want::List),
+            None => Sym::empty(),
+        };
+        let mut outs = self.inline_rets.pop().unwrap_or_default();
+        self.ir_stack.pop();
+        match self.dead.take() {
+            None => outs.push((v, self.env.clone())),
+            Some(Dead::Return) => {}
+            Some(Dead::Die) => {
+                if outs.is_empty() {
+                    self.dead = Some(Dead::Die);
+                }
+            }
+        }
+        self.line = line;
+        let mut it = outs.into_iter();
+        let Some((mut val, mut env)) = it.next() else {
+            self.env.frames.pop();
+            self.env.conds.truncate(base_conds);
+            return Sym::Unknown("die");
+        };
+        for (v2, e2) in it {
+            let ca: Vec<Cond> = env.conds.get(base_conds..).unwrap_or_default().to_vec();
+            let cb: Vec<Cond> = e2.conds.get(base_conds..).unwrap_or_default().to_vec();
+            val = join_syms(&ca, val, &cb, v2, width);
+            env = Env::join(env, e2, &ca, &cb, width);
+        }
+        env.frames.pop();
+        env.conds.truncate(base_conds);
+        self.env = env;
+        match want {
+            Want::List => val,
+            Want::Scalar => match view(&val) {
+                (items, None) => items.last().cloned().unwrap_or_else(Sym::undef),
+                _ => Sym::Unknown("call"),
+            },
+        }
+    }
+
+    /// `@a[LIST]`; `@_[N..$#_]` is the rest of the arguments from N.
+    fn eval_aslice(&mut self, n: &OpNode, want: Want) -> Sym {
+        let kids: Vec<&OpNode> = n.kids.iter().filter(|k| k.name != "pushmark").collect();
+        let (Some(ix), Some(ak)) = (kids.first(), kids.get(1)) else {
+            return Sym::Unknown("aslice");
+        };
+        let t = self.array_target(ak.skip_null());
+        let a = self.array_get(&t);
+        let to_end = (|| {
+            let flop = ix.skip_null();
+            let range = flop.kids.first()?.skip_null().kids.first()?.skip_null();
+            if flop.name != "flop" || range.name != "range" {
+                return None;
+            }
+            let lo = match &range.kids.first()?.skip_null().detail {
+                OpDetail::Const(lit) => Sym::Const(lit.clone()).const_int()?,
+                _ => return None,
+            };
+            let hi = range.kids.get(1)?.skip_null();
+            let hi_arr = hi.kids.first()?.skip_null();
+            let same = match (&t, hi_arr.name.as_str()) {
+                (ArrayTarget::Args, "rv2av") => hi_arr.kids.first().is_some_and(|k| is_args_gv(k.skip_null())),
+                (ArrayTarget::Pad(targ), "padav") => hi_arr.targ == *targ,
+                _ => false,
+            };
+            (hi.name == "av2arylen" && same && lo >= 0).then_some(lo as usize)
+        })();
+        let v = match to_end {
+            Some(lo) => list_drop(&a, lo),
+            None => {
+                let idx = self.eval(ix, Want::List);
+                match view(&idx) {
+                    (items, None) => {
+                        let mut out = Vec::new();
+                        for i in &items {
+                            match i.const_int() {
+                                Some(i) => out.push(list_elem(&a, i)),
+                                None => return Sym::Unknown("aslice"),
+                            }
+                        }
+                        mk_list(out, None)
+                    }
+                    _ => Sym::Unknown("aslice"),
+                }
+            }
+        };
+        match want {
+            Want::List => v,
+            Want::Scalar => match view(&v) {
+                (items, None) => items.last().cloned().unwrap_or_else(Sym::undef),
+                _ => Sym::Unknown("aslice"),
+            },
         }
     }
 
@@ -1584,9 +1752,7 @@ impl<'a> Exec<'a> {
         let Some(name) = find_gv(k) else {
             // goto &$code
             self.eval(k, Want::Scalar);
-            self.ret_envs.push(self.env.clone());
-            self.sum.returns.push(Sym::Unknown("goto"));
-            self.dead = Some(Dead::Return);
+            self.leave_with(Sym::Unknown("goto"));
             return Sym::Unknown("goto");
         };
         if is_die_sub(&name) {
@@ -1595,29 +1761,41 @@ impl<'a> Exec<'a> {
         }
         let from = self.args_front();
         let args = vec![self.env.top().args.clone()];
-        self.sum.forwards.push(ForwardEvent {
-            callee: name.clone(),
-            line: self.line,
-            kind: "goto",
-            from,
-            method: false,
-        });
-        self.sum.calls.push(CallEvent {
-            callee: name.clone(),
-            args: args.clone(),
-            line: self.line,
-            method: false,
-            inlined: false,
-        });
+        if self.at_top() {
+            self.sum.forwards.push(ForwardEvent {
+                callee: name.clone(),
+                line: self.line,
+                kind: "goto",
+                from,
+                method: false,
+            });
+            self.sum.calls.push(CallEvent {
+                callee: name.clone(),
+                args: args.clone(),
+                line: self.line,
+                method: false,
+                inlined: false,
+            });
+        }
         let v = Sym::Call {
             callee: name,
             args,
             method: false,
         };
-        self.sum.returns.push(v.clone());
-        self.ret_envs.push(self.env.clone());
-        self.dead = Some(Dead::Return);
+        self.leave_with(v.clone());
         v
+    }
+
+    /// Leave the current sub with value `v` (`return`, `goto &f`).
+    fn leave_with(&mut self, v: Sym) {
+        match self.inline_rets.last_mut() {
+            Some(rets) => rets.push((v, self.env.clone())),
+            None => {
+                self.sum.returns.push(v);
+                self.ret_envs.push(self.env.clone());
+            }
+        }
+        self.dead = Some(Dead::Return);
     }
 }
 
