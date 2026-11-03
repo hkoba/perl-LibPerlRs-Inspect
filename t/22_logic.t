@@ -242,4 +242,18 @@ subtest 'common prefix is not recorded' => sub {
     is_deeply stmts($_), [], "no stmts for $_->{exprs}[0]" for @{$l->{paths}};
 };
 
+subtest 'comparison atoms carry their negation' => sub {
+    my $l = logic_of('sub { my ($s, $n) = @_; return 1 if $s eq "a"; return 2 if $s =~ /x/; return 3 if defined $s; return 4 if $n <= 2; return 5 if $s gt "m"; 6 }');
+    is_deeply $l->{conds}, ['$s eq "a"', '$s =~ m/x/', 'defined($s)', '$n <= 2', '$s gt "m"'], 'atoms';
+    is_deeply $l->{cond_negs}, ['$s ne "a"', '$s !~ m/x/', undef, '$n > 2', '$s le "m"'], 'negations';
+};
+
+subtest 'full_trace records the common prefix' => sub {
+    my $code = eval 'sub { my ($x) = @_; setup(); if ($x) { "a" } else { "b" } }' or die $@;
+    my $l = LibPerlRs::Inspect::analyze_logic_opts($code, {full_trace => 1});
+    is_deeply stmts($_), ['my ($x) = @_', 'setup()'], "prefix for $_->{exprs}[0]" for @{$l->{paths}};
+    ok !exists $l->{paths}[0]{stmts}[0]{depth}, 'depth 0 is left out';
+    ok !exists $l->{paths}[0]{stmts}[0]{when}, 'an unguarded statement has no when';
+};
+
 done_testing;

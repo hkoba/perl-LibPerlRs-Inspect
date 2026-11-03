@@ -9,7 +9,7 @@ use std::collections::HashMap;
 #[cfg(perlapi_ver44)]
 use inspect_core::ir::NamedParam;
 use inspect_core::ir::{
-    DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit, padname_flags,
+    AnonSub, DerefStep, OpClass, OpDetail, OpNode, PadEntry, SubIr, SvLit, padname_flags,
 };
 use libperl_rs::{Cop, Cv, Gv, Op, Perl};
 use libperl_sys::{OPclass, OPf_KIDS, PerlInterpreter, methop, op, padop, sv, svop, svtype};
@@ -27,8 +27,21 @@ pub fn exec_op_names(cv: Cv) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// A captured tree together with the live handles the IR cannot hold.
+pub struct Captured {
+    pub ir: SubIr,
+    /// The anonymous subs of `ir.anon_subs`, in the same order, as live
+    /// CVs (valid as long as the enclosing CV is).
+    pub anon_cvs: Vec<(u32, Cv)>,
+}
+
 /// Copy the coderef's entire OP tree into a SubIr
 pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
+    capture_sub_full(perl, cv).map(|c| c.ir)
+}
+
+/// [`capture_sub`] keeping the CVs of the anonymous subs found in the tree.
+pub fn capture_sub_full(perl: &Perl, cv: Cv) -> Result<Captured, String> {
     if cv.is_xsub() {
         return Err("cannot analyze an XSUB (no op tree)".into());
     }
@@ -36,13 +49,18 @@ pub fn capture_sub(perl: &Perl, cv: Cv) -> Result<SubIr, String> {
     if root.is_null() {
         return Err("subroutine has no op tree".into());
     }
-    Ok(capture_tree(perl, cv, root, cv.start()))
+    Ok(capture_tree_full(perl, cv, root, cv.start()))
 }
 
 /// Copy the main program's top level into a SubIr: the pad of
 /// `PL_main_cv` with the op tree under `PL_main_root` (the main CV keeps
 /// its ops there, not in CvROOT). Call after `perl_parse`.
 pub fn capture_main(perl: &Perl) -> Result<SubIr, String> {
+    capture_main_full(perl).map(|c| c.ir)
+}
+
+/// [`capture_main`] keeping the CVs of the anonymous subs found in the tree.
+pub fn capture_main_full(perl: &Perl) -> Result<Captured, String> {
     let my_perl = perl.as_ptr();
     let cv = Cv::from_raw(libperl_sys::PL_main_cv!(my_perl))
         .ok_or_else(|| "no main CV (not parsed?)".to_string())?;
@@ -50,7 +68,7 @@ pub fn capture_main(perl: &Perl) -> Result<SubIr, String> {
     if root.is_null() {
         return Err("the main program has no op tree".into());
     }
-    Ok(capture_tree(
+    Ok(capture_tree_full(
         perl,
         cv,
         root,
@@ -61,20 +79,41 @@ pub fn capture_main(perl: &Perl) -> Result<SubIr, String> {
 /// Capture the tree under `root` (executed from `start`), resolving pad
 /// references through `cv`'s padlist
 pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> SubIr {
+    capture_tree_full(perl, cv, root, start).ir
+}
+
+fn capture_tree_full(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> Captured {
     let mut cap = Capturer {
         my_perl: perl.as_ptr(),
         cv,
+        package: cv.gv(perl).and_then(|g| g.stash_name()),
         ids: HashMap::new(),
         raws: Vec::new(),
         min_line: u32::MAX,
         max_line: 0,
         cops: Vec::new(),
+        anon: Vec::new(),
     };
     let mut root_node = cap.walk(root);
     cap.resolve(&mut root_node);
 
+    let anon_cvs: Vec<(u32, Cv)> = cap
+        .anon
+        .iter()
+        .filter_map(|(id, p)| Cv::from_raw(*p as *mut libperl_sys::CV).map(|cv| (*id, cv)))
+        .collect();
+    let anon_subs = anon_cvs
+        .iter()
+        .map(|(id, cv)| AnonSub {
+            node_id: *id,
+            file: cv.file(),
+            lines: cv_lines(perl, *cv),
+        })
+        .collect();
+
     let mut ir = SubIr {
         file: cv.file(),
+        package: cap.package.clone(),
         lines: if cap.max_line > 0 && cap.min_line <= cap.max_line {
             Some((cap.min_line, cap.max_line))
         } else {
@@ -84,6 +123,7 @@ pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const o
         pad: capture_pad(cv, &cap.cops),
         start_id: cap.lookup(start),
         root: root_node,
+        anon_subs,
     };
     let intro = ir.intro_lines();
     for p in &mut ir.pad {
@@ -91,7 +131,29 @@ pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const o
             p.line = Some(*line);
         }
     }
-    ir
+    Captured { ir, anon_cvs }
+}
+
+/// (min line, max line) over the COPs of a sub's tree, without capturing
+/// it. `None` for XSUBs, bodiless subs and trees without COPs.
+pub fn cv_lines(perl: &Perl, cv: Cv) -> Option<(u32, u32)> {
+    let mut acc: Option<(u32, u32)> = None;
+    let mut stack: Vec<Op> = cv.root_op().into_iter().collect();
+    while let Some(o) = stack.pop() {
+        if let Some(cop) = o.as_cop(perl) {
+            let l = cop.line();
+            if l > 0 {
+                acc = Some(match acc {
+                    Some((lo, hi)) => (lo.min(l), hi.max(l)),
+                    None => (l, l),
+                });
+            }
+        }
+        if (o.flags() as u32 & OPf_KIDS) != 0 {
+            stack.extend(o.kids());
+        }
+    }
+    acc
 }
 
 /// Raw pointers kept for pass 2 (pushed onto raws in the same order as ids)
@@ -106,12 +168,16 @@ struct RawLinks {
 struct Capturer {
     my_perl: *mut PerlInterpreter,
     cv: Cv,
+    /// The package the sub was compiled in (see `SubIr::package`).
+    package: Option<String>,
     ids: HashMap<usize, u32>,
     raws: Vec<RawLinks>,
     min_line: u32,
     max_line: u32,
     /// (cop_seq, line) of every COP in the sub, for placing pad names
     cops: Vec<(u32, u32)>,
+    /// (node id, CV) of every `anoncode` constant
+    anon: Vec<(u32, *const sv)>,
 }
 
 impl Capturer {
@@ -164,6 +230,13 @@ impl Capturer {
                 kids.push(self.walk(kid.as_ptr()));
             }
         }
+        let mut detail = detail;
+        if let OpDetail::Pm { pattern, .. } = &mut detail {
+            // a runtime pattern: what PM_GETRE holds is not its source
+            if kids.iter().any(|k| k.name == "regcomp") {
+                *pattern = None;
+            }
+        }
 
         OpNode {
             id,
@@ -206,6 +279,10 @@ impl Capturer {
                         p as *const sv
                     }
                 };
+                if !sv.is_null() && SvTYPE(sv) == svtype::SVt_PVCV {
+                    let id = self.ids[&(o as usize)];
+                    self.anon.push((id, sv));
+                }
                 sv_detail(sv)
             }
             OPclass::OPclass_PADOP => {
@@ -239,7 +316,7 @@ impl Capturer {
                 next: None,
                 last: None,
             }, // resolved in pass 2
-            OPclass::OPclass_PMOP => OpDetail::Pm { pattern: None },
+            OPclass::OPclass_PMOP => self.pm_detail(o),
             OPclass::OPclass_UNOP_AUX => {
                 let aux = unsafe { (*(o as *const libperl_sys::unop_aux)).op_aux };
                 match op_name_of_type(ty).as_str() {
@@ -337,7 +414,9 @@ impl Capturer {
                         items = items.add(1);
                         let name = match sv_lit(self.aux_item_sv(items)) {
                             SvLit::Glob { name, stash } => match stash.as_deref() {
-                                Some("main") | None => Some(name),
+                                None => Some(name),
+                                Some(pkg) if pkg == self.package.as_deref().unwrap_or("main") => Some(name),
+                                Some("main") if inspect_core::render::forced_main(&name) => Some(name),
                                 Some(pkg) => Some(format!("{}::{}", pkg, name)),
                             },
                             _ => None,
@@ -346,6 +425,7 @@ impl Capturer {
                     }
                     _ => (None, None),
                 };
+                let mut key_targ: Option<u64> = None;
                 let key = match actions & MDEREF_INDEX_MASK {
                     MDEREF_INDEX_CONST => {
                         items = items.add(1);
@@ -363,6 +443,7 @@ impl Capturer {
                     MDEREF_INDEX_PADSV => {
                         items = items.add(1);
                         let po = (*items).pad_offset as u64;
+                        key_targ = Some(po);
                         Some(
                             self.pad_name_at(po)
                                 .unwrap_or_else(|| format!("$pad{}", po)),
@@ -383,6 +464,7 @@ impl Capturer {
                     base_targ,
                     base_name,
                     key,
+                    key_targ,
                 });
                 if actions & MDEREF_FLAG_LAST != 0 {
                     break;
@@ -460,6 +542,51 @@ impl Capturer {
                 off = end;
             }
             OpDetail::MultiConcat { pieces }
+        }
+    }
+
+    /// The pattern source and modifiers of a PMOP (`PM_GETRE` →
+    /// `RX_PRECOMP` / `RX_PRELEN`; modifiers from `op_pmflags`).
+    fn pm_detail(&self, o: *const op) -> OpDetail {
+        // op_pmflags bits (op_reg_common.h / op.h; the same since 5.22)
+        const PM_FLAGS: &[(u32, &str)] = &[
+            (1 << 0, "m"),
+            (1 << 1, "s"),
+            (1 << 2, "i"),
+            (1 << 3, "x"),
+            (1 << 4, "x"),
+            (1 << 5, "n"),
+            (1 << 6, "p"),
+            (1 << 23, "g"),
+        ];
+        let pm = o as *const libperl_sys::pmop;
+        let pmflags = unsafe { (*pm).op_pmflags };
+        #[cfg(perl_useithreads)]
+        let rx = unsafe {
+            *(*self.my_perl).Iregex_pad.offset((*pm).op_pmoffset as isize) as *const sv
+        };
+        #[cfg(not(perl_useithreads))]
+        let rx = unsafe { (*pm).op_pmregexp as *const sv };
+        let pattern = if rx.is_null() || SvTYPE(rx) != svtype::SVt_REGEXP {
+            None
+        } else {
+            unsafe {
+                let p = libperl_sys::RX_PRECOMP(rx as *const libperl_sys::SV);
+                let n = libperl_sys::RX_PRELEN(rx as *const libperl_sys::SV);
+                (!p.is_null() && n >= 0).then(|| {
+                    let bytes = std::slice::from_raw_parts(p as *const u8, n as usize);
+                    String::from_utf8_lossy(bytes).into_owned()
+                })
+            }
+        };
+        let flags: String = PM_FLAGS
+            .iter()
+            .filter(|(bit, _)| pmflags & bit != 0)
+            .map(|(_, c)| *c)
+            .collect();
+        OpDetail::Pm {
+            pattern,
+            flags: (!flags.is_empty()).then_some(flags),
         }
     }
 
@@ -581,7 +708,7 @@ fn sv_detail(sv: *const sv) -> OpDetail {
 }
 
 /// Copy an SV out as a literal value (built from the official API only)
-fn sv_lit(sv: *const sv) -> SvLit {
+pub(crate) fn sv_lit(sv: *const sv) -> SvLit {
     if sv.is_null() {
         return SvLit::Other("NULL".into());
     }

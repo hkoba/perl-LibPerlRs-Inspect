@@ -17,6 +17,11 @@ use serde::{Deserialize, Serialize};
 pub struct SubIr {
     /// CvFILE. "(eval N)" for subs that come from eval
     pub file: Option<String>,
+    /// The package the sub was compiled in (the stash of `CvGV`); `None`
+    /// when unknown, which is taken as `main`. Names in that package are
+    /// rendered unqualified, as they are written in the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     /// (min line, max line) over the COPs in the tree
     pub lines: Option<(u32, u32)>,
     /// CvPROTO (not yet supported: always None. Planned for M5)
@@ -27,6 +32,22 @@ pub struct SubIr {
     pub start_id: Option<u32>,
     /// The tree under CvROOT
     pub root: OpNode,
+    /// Anonymous subs (`sub {...}`) whose prototype CV is a constant of
+    /// this tree, keyed by the node id of that constant (an `anoncode`
+    /// op). Their bodies are separate CVs, not part of `root`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anon_subs: Vec<AnonSub>,
+}
+
+/// An anonymous sub referenced from a tree (see [`SubIr::anon_subs`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnonSub {
+    /// Node id of the `anoncode` constant holding the sub.
+    pub node_id: u32,
+    /// CvFILE of the anonymous sub.
+    pub file: Option<String>,
+    /// (min line, max line) over the COPs of its body.
+    pub lines: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -189,9 +210,14 @@ pub enum OpDetail {
         next: Option<u32>,
         last: Option<u32>,
     },
-    /// PMOP. Retrieving the pattern is an M5 stretch goal
+    /// PMOP (`m//`, `s///`, `qr//`, `split`). `pattern` is the source of
+    /// a pattern fixed at compile time (None for a runtime pattern, which
+    /// has a `regcomp` kid).
     Pm {
         pattern: Option<String>,
+        /// Modifiers of the op (`msixxnpg` subset), None when there are none.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        flags: Option<String>,
     },
     /// Decoded multideref (UNOP_AUX): the deref chain of e.g. `$x->[0]{k}`
     MultiDeref {
@@ -233,6 +259,9 @@ pub struct DerefStep {
     /// Index/key (the value for const, the variable name for padsv, $name for gvsv; None if dynamic)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub key: Option<String>,
+    /// Pad index of a lexical index/key (the padsv case of `key`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub key_targ: Option<u64>,
 }
 
 impl OpDetail {
@@ -255,6 +284,11 @@ pub enum SvLit {
 }
 
 impl SubIr {
+    /// The package names are rendered relative to (see [`SubIr::package`]).
+    pub fn package_name(&self) -> &str {
+        self.package.as_deref().unwrap_or("main")
+    }
+
     /// References to all nodes in pre-order (id order)
     pub fn nodes(&self) -> Vec<&OpNode> {
         let mut acc = Vec::new();

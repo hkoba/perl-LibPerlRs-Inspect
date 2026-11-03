@@ -23,6 +23,67 @@ sub capture {
     $_json->decode(capture_json($code));
 }
 
+# Truth table of the statements on source lines $start..$end of $code,
+# treated as one block: routes leaving the block at its end are
+# "fallthrough" outcomes. Dies when no statement touches the range.
+sub analyze_logic_range {
+    my ($code, $start, $end) = @_;
+    $end = $start unless defined $end;
+    $_json->decode(analyze_logic_range_json($code, $start, $end));
+}
+
+# The logic (truth table) of $code with options:
+#   alias_modifies => 1   treat f($x) / $x->m (aliasing through @_) as a
+#                         modification of $x, so conditions on $x before
+#                         and after the call are kept apart
+#   identity => 'strict'  (default) two sites are one condition when they
+#                         test the same value: a reassignment of $x in
+#                         between keeps them apart, and `defined($x = f())`
+#                         is the same as a later `defined($x)`
+#   identity => 'expr'    reassignments are ignored; an assignment is the
+#                         expression it is written as, so
+#                         `defined($x = a())` and `defined($x = b())` are
+#                         two conditions but `$x >= 3` and a later `$x < 3`
+#                         are one
+#   identity => 'var'     reassignments are ignored and an assignment stands
+#                         for its variable: `defined($x = a())`,
+#                         `defined($x = b())` and `defined($x)` are one
+#                         condition, shown as `defined($x)`
+#   full_trace => 1       record every statement on a route: those before
+#                         the first branch too, and the bodies of loops and
+#                         eval blocks nested under a header statement (with
+#                         `depth` and, for a statement inside a branch of the
+#                         body, its own `when`)
+sub analyze_logic_opts {
+    my ($code, $opts) = @_;
+    $opts ||= {};
+    $_json->decode(analyze_logic_opts_json($code, _logic_opt_args($opts)));
+}
+
+sub _logic_opt_args {
+    my ($opts) = @_;
+    ($opts->{alias_modifies} ? 1 : 0, $opts->{identity} // 'strict', $opts->{full_trace} ? 1 : 0);
+}
+
+# analyze_logic_range with the options of analyze_logic_opts.
+sub analyze_logic_range_opts {
+    my ($code, $start, $end, $opts) = @_;
+    $end = $start unless defined $end;
+    $opts ||= {};
+    $_json->decode(analyze_logic_range_opts_json($code, $start, $end, _logic_opt_args($opts)));
+}
+
+# Findings for a call site (an element of analyze($caller)->{calls})
+# against the argument spec of its callee (analyze($callee)->{args}):
+# a list of {kind => too_few|too_many|unknown_key|missing_key|note,
+# message => ...}. $callee_is_method: the call passes an invocant that is
+# not among its args (implied for a method call).
+sub check_call {
+    my ($spec, $call, $callee_is_method) = @_;
+    my $enc = JSON::PP->new->canonical;
+    $_json->decode(check_call_json($enc->encode($spec), $enc->encode($call), $callee_is_method ? 1 : 0));
+}
+
 # analyze() returns a native hashref directly from the XS side (no JSON round trip).
 # Use analyze_json() if you want the JSON string.
 

@@ -72,6 +72,19 @@ jobs:
       - name: Test
         run: make test
 
+      # When the goldens drift, regenerate this cell's set and upload it so
+      # it can be reviewed and committed without a local perl of this kind
+      - name: Regenerate goldens (on failure)
+        if: failure()
+        run: UPDATE_GOLDEN=1 prove -b t/10_capture_golden.t
+
+      - name: Upload regenerated goldens
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-${{ matrix.perl-version }}-${{ matrix.threaded && 'threaded' || 'nonthreaded' }}
+          path: t/golden/
+
       # Refcount imbalance detection
       - name: Test with PERL_DESTRUCT_LEVEL=2
         run: make test

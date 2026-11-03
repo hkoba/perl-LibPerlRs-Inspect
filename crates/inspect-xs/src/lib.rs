@@ -42,12 +42,105 @@ fn analyze_json(my_perl: &Perl, code: Cv) -> Result<String, String> {
     serde_json::to_string(&report).map_err(|e| e.to_string())
 }
 
+/// `LibPerlRs::Inspect::analyze_logic_range_json($coderef, $start, $end)`
+/// — truth table of the statements on source lines `$start..$end` of the
+/// sub, treated as one block (`inspect_core::passes::logic::analyze_logic_range`),
+/// as a JSON string. Dies when no statement touches the range.
+#[xs_sub]
+fn analyze_logic_range_json(my_perl: &Perl, code: Cv, start: IV, end: IV) -> Result<String, String> {
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let (lo, hi) = (u32::try_from(start.max(0)).unwrap_or(u32::MAX), u32::try_from(end.max(0)).unwrap_or(u32::MAX));
+    let r = inspect_core::passes::logic::analyze_logic_range(&ir, lo..=hi).map_err(|e| e.to_string())?;
+    serde_json::to_string(&r).map_err(|e| e.to_string())
+}
+
+fn logic_opts(alias_modifies: IV, identity: &str, full_trace: IV) -> Result<inspect_core::passes::logic::LogicOpts, String> {
+    use inspect_core::passes::logic::{Identity, LogicOpts};
+    let identity = Identity::parse(identity)
+        .ok_or_else(|| format!("identity must be strict, expr or var, not {identity:?}"))?;
+    Ok(LogicOpts { alias_modifies: alias_modifies != 0, identity, full_trace: full_trace != 0 })
+}
+
+/// `LibPerlRs::Inspect::analyze_logic_opts_json($coderef, $alias_modifies, $identity, $full_trace)`
+/// — the logic (truth table) of the sub with options, as a JSON string.
+/// `$identity` is `strict`, `expr` or `var` (see `Identity`); `$full_trace`
+/// records every statement on a route (see `LogicOpts::full_trace`).
+#[xs_sub]
+fn analyze_logic_opts_json(
+    my_perl: &Perl,
+    code: Cv,
+    alias_modifies: IV,
+    identity: &str,
+    full_trace: IV,
+) -> Result<String, String> {
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let opts = logic_opts(alias_modifies, identity, full_trace)?;
+    let l = inspect_core::passes::logic::analyze_logic_with(&ir, &opts);
+    serde_json::to_string(&l).map_err(|e| e.to_string())
+}
+
+/// `LibPerlRs::Inspect::analyze_logic_range_opts_json($coderef, $start, $end, $alias_modifies, $identity, $full_trace)`
+/// — `analyze_logic_range_json` with the options of `analyze_logic_opts_json`.
+#[xs_sub]
+fn analyze_logic_range_opts_json(
+    my_perl: &Perl,
+    code: Cv,
+    start: IV,
+    end: IV,
+    alias_modifies: IV,
+    identity: &str,
+    full_trace: IV,
+) -> Result<String, String> {
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let (lo, hi) = (u32::try_from(start.max(0)).unwrap_or(u32::MAX), u32::try_from(end.max(0)).unwrap_or(u32::MAX));
+    let opts = logic_opts(alias_modifies, identity, full_trace)?;
+    let r = inspect_core::passes::logic::analyze_logic_range_with(&ir, lo..=hi, &opts).map_err(|e| e.to_string())?;
+    serde_json::to_string(&r).map_err(|e| e.to_string())
+}
+
+/// `LibPerlRs::Inspect::check_call_json($spec_json, $call_json, $callee_is_method)`
+/// — findings (JSON array) for a call site (an element of
+/// `analyze(...)->{calls}`) against an argument spec (`analyze(...)->{args}`)
+/// (`inspect_core::passes::check::check_call`).
+#[xs_sub]
+fn check_call_json(spec_json: &str, call_json: &str, callee_is_method: IV) -> Result<String, String> {
+    use inspect_core::passes::{argspec::ArgSpec, callsites::CallSite, check::check_call};
+    let spec: ArgSpec = serde_json::from_str(spec_json).map_err(|e| format!("spec: {e}"))?;
+    let call: CallSite = serde_json::from_str(call_json).map_err(|e| format!("call: {e}"))?;
+    let findings = check_call(&spec, &call, callee_is_method != 0);
+    serde_json::to_string(&findings).map_err(|e| e.to_string())
+}
+
 /// `LibPerlRs::Inspect::analyze($coderef)` — analysis report as a native
 /// nested hashref (no JSON round-trip on the Perl side).
 #[xs_sub]
 fn analyze(my_perl: &Perl, code: Cv) -> Result<Rv<Hv>, String> {
     let ir = inspect_capture::capture_sub(my_perl, code)?;
     let report = inspect_core::passes::analyze(&ir);
+    let value = serde_json::to_value(&report).map_err(|e| e.to_string())?;
+    let Value::Object(map) = value else {
+        return Err("analysis report did not serialize to an object".into());
+    };
+    Ok(build_hv(my_perl, &map).into_rv(my_perl))
+}
+
+/// `LibPerlRs::Inspect::analyze_with_helpers($coderef, $helpers)` —
+/// [`analyze`] whose argument spec inlines the argument helpers named in
+/// `$helpers` (comma separated, package-qualified; subs of the same home
+/// package are inlined too).
+#[xs_sub]
+fn analyze_with_helpers(my_perl: &Perl, code: Cv, helpers: &str) -> Result<Rv<Hv>, String> {
+    use inspect_core::passes::{argspec, symexec::Limits};
+    let ir = inspect_capture::capture_sub(my_perl, code)?;
+    let names: Vec<String> = helpers
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    let src = inspect_capture::symsrc::PerlSource::new(my_perl, &names);
+    let mut report = inspect_core::passes::analyze(&ir);
+    report.args = argspec::analyze_args_with(&ir, &src, &Limits::default());
     let value = serde_json::to_value(&report).map_err(|e| e.to_string())?;
     let Value::Object(map) = value else {
         return Err("analysis report did not serialize to an object".into());
@@ -253,6 +346,11 @@ xs_boot! {
         dump_optree,
         analyze_json,
         analyze,
+        analyze_with_helpers,
+        check_call_json,
+        analyze_logic_range_json,
+        analyze_logic_range_opts_json,
+        analyze_logic_opts_json,
         begin_capture,
         begins,
         require_sites,

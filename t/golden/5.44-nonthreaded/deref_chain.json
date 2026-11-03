@@ -4,6 +4,7 @@
       1,
       1
    ],
+   "package" : "Fixtures",
    "pad" : [
       {
          "flags" : 0,
@@ -252,7 +253,8 @@
                                        {
                                           "base" : "chain",
                                           "container" : "array",
-                                          "key" : "$i"
+                                          "key" : "$i",
+                                          "key_targ" : 2
                                        }
                                     ]
                                  }
