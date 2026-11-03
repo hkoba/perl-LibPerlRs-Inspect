@@ -329,7 +329,7 @@ fn pad_var(ir: &SubIr, targ: u64) -> String {
 
 /// Escape a string for display inside double quotes. `interp` also
 /// escapes `$` / `@` (for pieces of an interpolated string).
-fn escape_str(s: &str, interp: bool) -> String {
+pub(crate) fn escape_str(s: &str, interp: bool) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

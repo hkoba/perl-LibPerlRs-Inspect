@@ -1,16 +1,24 @@
-//! Argument spec inference. Four-tier pattern detection (in priority order):
-//!   1. signature (argcheck/argelem, or multiparam on perl 5.44+) — yields
-//!      the exact arity
-//!   2. `my (...) = @_` (aassign + rv2av *_)
-//!   3. a run of `my $x = shift` (padsv_store + shift)
-//!   4. direct `$_[n]` access — only a lower bound on arity
+//! Argument spec inference.
+//!
+//! A signature (argcheck/argelem, or multiparam on perl 5.44+) yields the
+//! exact spec directly. Everything else is a summary of the symbolic
+//! execution of the whole body ([`super::symexec`]): `my (...) = @_`,
+//! `shift` / `pop` / `splice`, `$_[n]`, `foreach (@_)`, hash arguments
+//! (`my %args = @_; $args{key}`), defaults (`//`, `||`, `//=`, `unless
+//! defined`, `@_ ? shift : d`), arity checks that die, and calls that pass
+//! the remaining arguments on.
 
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use crate::ir::{NamedParam, OpDetail, OpNode, SubIr};
+use crate::ir::{NamedParam, OpDetail, SubIr};
 use crate::render::render;
+
+use super::symexec::{
+    self, Cond, IrSource, Key, Limits, NoSource, ReadKind, Summary, Sym, arity_offset,
+};
+pub use super::symexec::Norm;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArgSpec {
@@ -21,6 +29,20 @@ pub struct ArgSpec {
     pub max_arity: Option<u64>,
     pub params: Vec<Param>,
     pub invocant_guess: Option<String>,
+    /// Keys read from hash arguments (`$args{key}`, `$opts->{key}`).
+    #[serde(default)]
+    pub named: Vec<NamedKey>,
+    /// Calls that pass (the rest of) the arguments on.
+    #[serde(default)]
+    pub forwards: Vec<Forward>,
+    /// Calls to argument-processing helpers (`rearrange`, `m4i_args`).
+    #[serde(default)]
+    pub helpers: Vec<HelperUse>,
+    /// Conditions on the number of arguments.
+    #[serde(default)]
+    pub checks: Vec<ArityCheck>,
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,13 +58,111 @@ pub struct Param {
     /// the number of positional parameters.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub key: Option<String>,
+    /// Every argument slot the variable may hold (more than one when it
+    /// depends on a branch).
+    #[serde(default)]
+    pub alts: Vec<Slot>,
+    /// Line of the statement that takes the argument.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line: Option<u32>,
+    /// The argument is taken only on some paths.
+    #[serde(default)]
+    pub conditional: bool,
+    /// Declared class (`my Foo $x`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub typ: Option<String>,
+}
+
+/// Which part of `@_` a parameter holds.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Slot {
+    /// `$_[n]` of the original `@_`
+    Front(u64),
+    /// the n-th argument from the end (0 = last)
+    Back(u64),
+    /// the arguments from index n on
+    Rest(u64),
+    /// the value of a hash argument key
+    Key(String),
+    /// the number of arguments
+    Count,
+    Unknown,
+}
+
+/// A key read from a hash of arguments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedKey {
+    pub key: String,
+    /// The variable the key is read through (`%args`, `$opts`) or the
+    /// helper that defines it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub via: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default: Option<String>,
+    /// Read on every path without a default or an `exists` test.
+    #[serde(default)]
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line: Option<u32>,
+    /// Normalizations applied to the caller's key before the match.
+    #[serde(default)]
+    pub normalize: Vec<Norm>,
+    /// Other keys that map to the same parameter.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+/// A call that passes the arguments on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Forward {
+    pub callee: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line: Option<u32>,
+    /// rest (`f(@_)` after shifts) | all (`f(@_)`) | goto (`goto &f`) |
+    /// amper (`&f;`)
+    pub kind: String,
+    /// Index of the first original argument passed on.
+    pub from: u32,
+}
+
+/// A call to an argument-processing helper.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HelperUse {
+    pub callee: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line: Option<u32>,
+    pub inlined: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub note: Option<String>,
+}
+
+/// A condition on the number of arguments, as the condition the
+/// arguments must satisfy (`croak unless @_ == 2` → `== 2`, `die if @_ >
+/// 5` → `<= 5`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArityCheck {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line: Option<u32>,
+    /// == | != | >= | <= | > | <
+    pub cmp: String,
+    pub n: Option<u64>,
+    /// The other path dies (otherwise it returns early).
+    pub enforced: bool,
 }
 
 pub fn analyze_args(ir: &SubIr) -> ArgSpec {
+    analyze_args_with(ir, &NoSource, &Limits::default())
+}
+
+/// [`analyze_args`] with helper bodies supplied by `src` (inlined into the
+/// symbolic execution).
+pub fn analyze_args_with(ir: &SubIr, src: &dyn IrSource, limits: &Limits) -> ArgSpec {
     if let Some(spec) = detect_signature(ir) {
         return spec;
     }
-    detect_classic(ir)
+    let sum = symexec::exec_sub(ir, src, limits);
+    spec_from_summary(ir, &sum)
 }
 
 /// signature: argcheck / argelem / argdefelem under null(ex-argcheck), or
@@ -77,6 +197,7 @@ fn detect_signature(ir: &SubIr) -> Option<ArgSpec> {
                 default,
                 source: "signature".into(),
                 key: None,
+                ..Param::new()
             });
         }
         OpDetail::MultiParam { .. } => multi = Some(&node.detail),
@@ -122,6 +243,7 @@ fn detect_signature(ir: &SubIr) -> Option<ArgSpec> {
         max_arity: if slurpy.is_some() { None } else { Some(p) },
         invocant_guess: guess_invocant(&params),
         params,
+        ..ArgSpec::empty()
     })
 }
 
@@ -146,6 +268,7 @@ fn multiparam_spec(
         default: defaults.get(&padix).cloned(),
         source: "signature".into(),
         key,
+        ..Param::new()
     };
     let mut params: Vec<Param> = param_padix
         .iter()
@@ -170,227 +293,574 @@ fn multiparam_spec(
         },
         invocant_guess: guess_invocant(&params),
         params,
+        ..ArgSpec::empty()
     }
 }
 
-/// Classic patterns: pick up the run of shifts / my(...)=@_ from the start of
-/// the body, and $_[n] from the whole tree
-fn detect_classic(ir: &SubIr) -> ArgSpec {
-    let mut params: Vec<Param> = Vec::new();
-    let mut styles: Vec<&str> = Vec::new();
-    let mut slurpy = false;
-    let mut next_index: u64 = 0;
-
-    // scan the preamble (the leading run of argument-extraction statements)
-    for (_line, stmt) in super::statements(ir) {
-        let s = stmt.skip_null();
-        if let Some(name) = shift_into_pad(ir, s) {
-            params.push(Param {
-                name: Some(name),
-                index: next_index,
-                default: None,
-                source: "shift".into(),
-                key: None,
-            });
-            next_index += 1;
-            if !styles.contains(&"shift") {
-                styles.push("shift");
-            }
-            continue;
+impl ArgSpec {
+    fn empty() -> ArgSpec {
+        ArgSpec {
+            style: "none".into(),
+            min_arity: 0,
+            max_arity: None,
+            params: Vec::new(),
+            invocant_guess: None,
+            named: Vec::new(),
+            forwards: Vec::new(),
+            helpers: Vec::new(),
+            checks: Vec::new(),
+            notes: Vec::new(),
         }
-        if let Some((names, has_slurpy)) = unpack_from_args(ir, s) {
-            for name in names {
-                let is_slurpy_param =
-                    name.starts_with('@') || name.starts_with('%');
-                params.push(Param {
-                    name: Some(name),
-                    index: next_index,
-                    default: None,
-                    source: "unpack".into(),
-                    key: None,
-                });
-                if !is_slurpy_param {
-                    next_index += 1;
-                }
-            }
-            slurpy = slurpy || has_slurpy;
-            if !styles.contains(&"unpack") {
-                styles.push("unpack");
-            }
-            continue;
-        }
-        break; // a statement that is not argument extraction ends the preamble
     }
+}
 
-    // direct $_[n] access (whole tree)
-    let mut max_elem_index: Option<i64> = None;
-    super::walk_with_lines(ir, |node, _| {
-        if let Some(ix) = arg_elem_index(node) {
-            if max_elem_index.is_none_or(|m| ix > m) {
-                max_elem_index = Some(ix);
-            }
+impl Param {
+    fn new() -> Param {
+        Param {
+            name: None,
+            index: 0,
+            default: None,
+            source: String::new(),
+            key: None,
+            alts: Vec::new(),
+            line: None,
+            conditional: false,
+            typ: None,
         }
-    });
-    if let Some(m) = max_elem_index {
-        if m >= 0 {
-            if !styles.contains(&"positional") {
-                styles.push("positional");
-            }
-            for ix in 0..=m {
-                let ixu = ix as u64;
-                if !params.iter().any(|p| p.index == ixu) {
-                    params.push(Param {
-                        name: None,
-                        index: ixu,
-                        default: None,
-                        source: "elem".into(),
-                        key: None,
-                    });
+    }
+}
+
+/// The argument slots a value holds (hash keys excluded: those are
+/// reported as [`NamedKey`]s).
+fn slots_of(v: &Sym) -> Vec<Slot> {
+    let mut out = Vec::new();
+    collect_slots(v, &mut out);
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn collect_slots(v: &Sym, out: &mut Vec<Slot>) {
+    match v {
+        Sym::Arg(i) => out.push(Slot::Front(*i as u64)),
+        Sym::ArgBack(i) => out.push(Slot::Back(*i as u64)),
+        Sym::ArgRest(i) | Sym::ArgMid(i, _) => out.push(Slot::Rest(*i as u64)),
+        Sym::Hash { segs } => {
+            for seg in segs {
+                if let symexec::HashSeg::Rest(r) = seg {
+                    if let Some((f, _)) = r.as_arg_slice() {
+                        out.push(Slot::Rest(f as u64));
+                    }
                 }
             }
         }
+        Sym::Default { arg, .. } => collect_slots(arg, out),
+        Sym::Join(alts) => alts.iter().for_each(|(_, s)| collect_slots(s, out)),
+        _ => {}
     }
+}
 
-    let style = match styles.len() {
-        0 => "none".to_string(),
-        1 => styles[0].to_string(),
-        _ => "mixed".to_string(),
+/// `scalar(@_)` (of what remains of the arguments).
+fn is_count(v: &Sym) -> bool {
+    matches!(v, Sym::Len(l) if arity_offset(l).is_some())
+}
+
+/// The value a parameter is described by: the value at its first
+/// assignment, or the final value when that only adds a default or
+/// alternatives to it (`$x //= 1`, `$opt = shift if ...`).
+fn choose(first: &Sym, last: Option<&Sym>) -> Sym {
+    let Some(last) = last else {
+        return first.clone();
     };
-    let positional = params
-        .iter()
-        .filter(|p| {
-            p.name
-                .as_deref()
-                .is_none_or(|n| !n.starts_with('@') && !n.starts_with('%'))
-        })
-        .count() as u64;
-    // Classic patterns cannot distinguish required from optional. Only
-    // unconditional $_[n] access gives grounds for a lower bound
-    let min_arity = max_elem_index.map_or(0, |m| (m + 1).max(0) as u64);
-    ArgSpec {
-        style,
-        min_arity,
-        // an effective upper bound is only known for unpack without a slurpy
-        max_arity: if !slurpy && styles == ["unpack"] {
-            Some(positional)
-        } else {
-            None
-        },
-        invocant_guess: guess_invocant(&params),
-        params,
+    let extends = |s: &Sym| s == first || matches!(s, Sym::Default { arg, .. } if **arg == *first);
+    match last {
+        s if extends(s) => s.clone(),
+        Sym::Join(alts)
+            if alts.iter().any(|(_, s)| extends(s))
+                && alts
+                    .iter()
+                    .all(|(_, s)| extends(s) || s.is_const() || !slots_of(s).is_empty()) =>
+        {
+            last.clone()
+        }
+        _ => first.clone(),
     }
 }
 
-/// `my $x = shift;` → padsv_store(targ=$x) with a bare shift as its child
-/// (the older form sassign(shift, padsv) is also handled)
-fn shift_into_pad(ir: &SubIr, s: &OpNode) -> Option<String> {
-    match s.name.as_str() {
-        "padsv_store" => {
-            let k = s.kids.first()?.skip_null();
-            if k.name == "shift" && shifts_default_args(k) {
-                ir.pad_name(s.targ).map(String::from)
-            } else {
-                None
-            }
+fn default_of(v: &Sym) -> Option<String> {
+    match v {
+        Sym::Default { default, .. } => Some(default.display()),
+        Sym::Join(alts) => alts.iter().find_map(|(_, s)| default_of(s)),
+        _ => None,
+    }
+}
+
+/// The key of a hash-argument read (`$args{key}` → `key`).
+fn named_key(v: &Sym) -> Option<&str> {
+    match v {
+        Sym::Elem(base, Key::Str(k)) if base.mentions_args() => Some(k),
+        Sym::Default { arg, .. } => named_key(arg),
+        _ => None,
+    }
+}
+
+/// A callee name as written in the sub's package.
+fn local_name(ir: &SubIr, name: &str) -> String {
+    let pkg = ir.package_name();
+    name.strip_prefix(pkg)
+        .and_then(|r| r.strip_prefix("::"))
+        .filter(|r| !r.contains("::"))
+        .or_else(|| name.strip_prefix("main::"))
+        .unwrap_or(name)
+        .to_string()
+}
+
+/// An arity precondition as `(cmp, n)` on the original argument count.
+fn arity_cond(c: &Cond) -> Option<(&'static str, i64)> {
+    match &c.sym {
+        Sym::Len(l) => {
+            let off = arity_offset(l)?;
+            Some(if c.truth { (">=", off + 1) } else { ("==", off) })
         }
-        "sassign" => {
-            let rhs = s.kids.first()?.skip_null();
-            let lhs = s.kids.get(1)?.skip_null();
-            if rhs.name == "shift" && shifts_default_args(rhs) && lhs.name == "padsv" {
-                ir.pad_name(lhs.targ).map(String::from)
-            } else {
-                None
-            }
+        Sym::App(op, v) if v.len() == 2 => {
+            let (op, l, k) = match (&v[0], &v[1]) {
+                (Sym::Len(l), k) => (*op, l, k),
+                (k, Sym::Len(l)) => (flip(op)?, l, k),
+                _ => return None,
+            };
+            let n = k.const_int()? + arity_offset(l)?;
+            let op = if c.truth { op } else { negate(op)? };
+            matches!(op, "==" | "!=" | "<" | ">" | "<=" | ">=").then_some((op, n))
         }
         _ => None,
     }
 }
 
-/// Whether the shift operates on @_ (bare = @_; if explicit, check for rv2av(gv *_))
-fn shifts_default_args(shift: &OpNode) -> bool {
-    if shift.kids.is_empty() {
-        return true; // a bare shift inside a sub is on @_
-    }
-    subtree_has_underscore_av(shift)
+fn flip(op: &str) -> Option<&'static str> {
+    Some(match op {
+        "==" => "==",
+        "!=" => "!=",
+        "<" => ">",
+        ">" => "<",
+        "<=" => ">=",
+        ">=" => "<=",
+        _ => return None,
+    })
 }
 
-/// `my (...) = @_;` → aassign(rv2av(*_) on the RHS, a run of padsv/padav/padhv on the LHS)
-fn unpack_from_args(ir: &SubIr, s: &OpNode) -> Option<(Vec<String>, bool)> {
-    if s.name != "aassign" {
-        return None;
-    }
-    let rhs = s.kids.first()?;
-    let lhs = s.kids.get(1)?;
-    if !subtree_has_underscore_av(rhs) {
-        return None;
-    }
-    let mut names = Vec::new();
-    let mut slurpy = false;
-    collect_lhs_targets(ir, lhs, &mut names, &mut slurpy);
-    if names.is_empty() {
-        return None;
-    }
-    Some((names, slurpy))
+fn negate(op: &str) -> Option<&'static str> {
+    Some(match op {
+        "==" => "!=",
+        "!=" => "==",
+        "<" => ">=",
+        ">" => "<=",
+        "<=" => ">",
+        ">=" => "<",
+        _ => return None,
+    })
 }
 
-fn collect_lhs_targets(ir: &SubIr, n: &OpNode, names: &mut Vec<String>, slurpy: &mut bool) {
-    let n = n.skip_null();
-    match n.name.as_str() {
-        "padsv" => {
-            if let Some(name) = ir.pad_name(n.targ) {
-                names.push(name.to_string());
-            }
-        }
-        "padav" | "padhv" => {
-            if let Some(name) = ir.pad_name(n.targ) {
-                names.push(name.to_string());
-                *slurpy = true;
-            }
-        }
-        _ => {
-            for k in &n.kids {
-                collect_lhs_targets(ir, k, names, slurpy);
-            }
-        }
-    }
-}
+/// The spec from a symbolic execution of the body.
+fn spec_from_summary(ir: &SubIr, sum: &Summary) -> ArgSpec {
+    let fin = &sum.env.top().pads;
+    // (seq, param, value it stands for)
+    let mut params: Vec<(u32, Param, Sym)> = Vec::new();
 
-/// Whether the subtree contains @_ (gv *_ under rv2av / via padrange)
-fn subtree_has_underscore_av(n: &OpNode) -> bool {
-    let n = n.skip_null();
-    if n.name == "rv2av" {
-        if let Some(k) = n.kids.first().map(|k| k.skip_null()) {
-            if let OpDetail::Gv { name, stash } = &k.detail {
-                if name == "_" && stash.as_deref().unwrap_or("main") == "main" {
-                    return true;
+    // variables that receive arguments
+    for a in &sum.assigns {
+        let Some(entry) = ir.pad.iter().find(|e| e.ix as u64 == a.targ) else {
+            continue;
+        };
+        let Some(name) = entry.name.clone() else {
+            continue;
+        };
+        let value = choose(&a.sym, fin.get(&a.targ));
+        let mut alts = slots_of(&value);
+        if alts.is_empty() {
+            if !is_count(&value) {
+                continue;
+            }
+            alts.push(Slot::Count);
+        }
+        params.push((
+            a.seq,
+            Param {
+                name: Some(name),
+                default: default_of(&value),
+                source: a.source.into(),
+                alts,
+                line: a.line,
+                conditional: a.conditional || matches!(value, Sym::Join(_)),
+                typ: entry.typ.clone(),
+                ..Param::new()
+            },
+            value,
+        ));
+    }
+
+    // direct element reads and loops over the arguments
+    let mut elem_bound: u64 = 0;
+    for r in &sum.reads {
+        match &r.kind {
+            ReadKind::Elem => {
+                if let (Sym::Arg(i), false) = (&r.sym, r.conditional) {
+                    elem_bound = elem_bound.max(*i as u64 + 1);
                 }
+                let alts = slots_of(&r.sym);
+                if alts.is_empty() || params.iter().any(|(_, _, v)| *v == r.sym) {
+                    continue;
+                }
+                params.push((
+                    r.seq,
+                    Param {
+                        name: r.text.clone(),
+                        source: "elem".into(),
+                        alts,
+                        line: r.line,
+                        conditional: r.conditional || matches!(r.sym, Sym::Join(_)),
+                        ..Param::new()
+                    },
+                    r.sym.clone(),
+                ));
+            }
+            ReadKind::Iter => {
+                let alts = slots_of(&r.sym);
+                if params
+                    .iter()
+                    .any(|(_, p, _)| p.alts.iter().any(|s| alts.contains(s)))
+                {
+                    continue;
+                }
+                params.push((
+                    r.seq,
+                    Param {
+                        name: Some("@_".into()),
+                        source: "list".into(),
+                        alts,
+                        line: r.line,
+                        conditional: r.conditional,
+                        ..Param::new()
+                    },
+                    r.sym.clone(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    params.sort_by_key(|(seq, _, _)| *seq);
+    let positional = params
+        .iter()
+        .flat_map(|(_, p, _)| &p.alts)
+        .filter_map(|s| match s {
+            Slot::Front(n) => Some(n + 1),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let mut params: Vec<Param> = params.into_iter().map(|(_, p, _)| p).collect();
+    for p in &mut params {
+        p.index = match p.alts.first() {
+            Some(Slot::Front(n) | Slot::Rest(n)) => *n,
+            _ => positional,
+        };
+    }
+
+    // keys of hash arguments
+    let mut named: Vec<NamedKey> = Vec::new();
+    let mut plain: Vec<String> = Vec::new();
+    let mut tested: Vec<String> = Vec::new();
+    for r in &sum.reads {
+        if matches!(r.kind, ReadKind::Elem | ReadKind::Iter) {
+            continue;
+        }
+        let Some(key) = named_key(&r.sym) else {
+            continue;
+        };
+        let ix = match named.iter().position(|n| n.key == key) {
+            Some(ix) => ix,
+            None => {
+                named.push(NamedKey {
+                    key: key.to_string(),
+                    via: None,
+                    default: None,
+                    required: false,
+                    line: r.line,
+                    normalize: Vec::new(),
+                    aliases: Vec::new(),
+                });
+                named.len() - 1
+            }
+        };
+        let n = &mut named[ix];
+        if n.via.is_none() {
+            n.via = r.via.clone();
+        }
+        match &r.kind {
+            ReadKind::Default(d) if n.default.is_none() => n.default = Some(d.display()),
+            ReadKind::Key if !r.conditional => plain.push(key.to_string()),
+            ReadKind::Exists => tested.push(key.to_string()),
+            _ => {}
+        }
+    }
+    for n in &mut named {
+        n.required = n.default.is_none() && plain.contains(&n.key) && !tested.contains(&n.key);
+    }
+
+    // arity checks
+    let mut checks = Vec::new();
+    let (mut lo, mut hi): (u64, Option<u64>) = (0, None);
+    for p in sum.preconds.iter().filter(|p| !p.conditional) {
+        let Some((cmp, n)) = arity_cond(&p.cond) else {
+            continue;
+        };
+        if n < 0 {
+            continue;
+        }
+        let n = n as u64;
+        if p.enforced {
+            match cmp {
+                "==" => {
+                    lo = lo.max(n);
+                    hi = Some(hi.map_or(n, |h| h.min(n)));
+                }
+                ">=" => lo = lo.max(n),
+                ">" => lo = lo.max(n + 1),
+                "<=" => hi = Some(hi.map_or(n, |h| h.min(n))),
+                "<" if n > 0 => hi = Some(hi.map_or(n - 1, |h| h.min(n - 1))),
+                _ => {}
             }
         }
+        checks.push(ArityCheck {
+            line: p.line,
+            cmp: cmp.into(),
+            n: Some(n),
+            enforced: p.enforced,
+        });
     }
-    n.kids.iter().any(subtree_has_underscore_av)
-}
 
-/// `$_[n]`: the index is the op_private of aelemfast (PADOP, gv *_).
-/// The aelem(rv2av(*_), const n) form is also covered
-fn arg_elem_index(node: &OpNode) -> Option<i64> {
-    let n = node; // do not skip nulls (the aelemfast under ex-aelem is the real op)
-    if n.name == "aelemfast" {
-        if let OpDetail::Gv { name, stash } = &n.detail {
-            if name == "_" && stash.as_deref().unwrap_or("main") == "main" {
-                return Some(n.private as i8 as i64);
-            }
+    let forwards: Vec<Forward> = sum
+        .forwards
+        .iter()
+        .map(|f| Forward {
+            callee: if f.method {
+                f.callee.clone()
+            } else {
+                local_name(ir, &f.callee)
+            },
+            line: f.line,
+            kind: f.kind.into(),
+            from: f.from,
+        })
+        .collect();
+
+    let mut styles: Vec<&str> = Vec::new();
+    for p in &params {
+        let st = match p.source.as_str() {
+            "shift" | "pop" | "splice" => "shift",
+            "unpack" => "unpack",
+            "elem" => "positional",
+            _ => continue,
+        };
+        if !styles.contains(&st) {
+            styles.push(st);
         }
     }
-    if n.name == "aelem" && n.kids.len() == 2 && subtree_has_underscore_av(&n.kids[0]) {
-        if let OpDetail::Const(crate::ir::SvLit::Iv(ix)) = &n.kids[1].skip_null().detail {
-            return Some(*ix);
-        }
+    let style = match styles.as_slice() {
+        [] => "none".to_string(),
+        [one] => one.to_string(),
+        _ => "mixed".to_string(),
+    };
+    // an upper bound from the unpacking itself: `my (...) = @_` without a
+    // slurpy, and nothing else that touches the arguments
+    let bounded = styles == ["unpack"]
+        && forwards.is_empty()
+        && params
+            .iter()
+            .all(|p| p.alts.iter().all(|s| matches!(s, Slot::Front(_))));
+    let mut max_arity = bounded.then_some(positional);
+    if let Some(h) = hi {
+        max_arity = Some(max_arity.map_or(h, |m| m.min(h)));
     }
-    None
+    let notes = sum.notes.clone();
+    ArgSpec {
+        style,
+        min_arity: lo.max(elem_bound),
+        max_arity,
+        invocant_guess: guess_invocant(&params),
+        params,
+        named,
+        forwards,
+        helpers: Vec::new(),
+        checks,
+        notes,
+    }
 }
-
 fn guess_invocant(params: &[Param]) -> Option<String> {
     let first = params.iter().find(|p| p.index == 0)?;
     let name = first.name.as_deref()?;
     matches!(name, "$self" | "$class" | "$proto" | "$pkg").then(|| name.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::passes::test_util::ir_of;
+
+    macro_rules! golden {
+        ($name:literal) => {
+            include_str!(concat!("../../../../t/golden/5.42-threaded/", $name, ".json"))
+        };
+    }
+
+    fn spec(golden: &str) -> ArgSpec {
+        let s = analyze_args(&ir_of(golden));
+        eprintln!("{}", serde_json::to_string_pretty(&s).unwrap());
+        s
+    }
+
+    fn param<'a>(s: &'a ArgSpec, name: &str) -> &'a Param {
+        s.params
+            .iter()
+            .find(|p| p.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no param {}", name))
+    }
+
+    fn names(s: &ArgSpec) -> Vec<&str> {
+        s.params.iter().filter_map(|p| p.name.as_deref()).collect()
+    }
+
+    fn key<'a>(s: &'a ArgSpec, k: &str) -> &'a NamedKey {
+        s.named
+            .iter()
+            .find(|n| n.key == k)
+            .unwrap_or_else(|| panic!("no key {}", k))
+    }
+
+    #[test]
+    fn shift_then_loop_over_the_rest() {
+        let s = spec(golden!("args_shift_loop"));
+        assert_eq!(names(&s), ["$sum", "@_"]);
+        assert_eq!(param(&s, "$sum").alts, [Slot::Front(0)]);
+        assert_eq!(param(&s, "$sum").source, "shift");
+        assert_eq!(param(&s, "@_").alts, [Slot::Rest(1)]);
+        assert_eq!(param(&s, "@_").source, "list");
+        assert_eq!(s.style, "shift");
+    }
+
+    #[test]
+    fn hash_of_options() {
+        let s = spec(golden!("args_opts_hash"));
+        assert_eq!(names(&s), ["$self", "%args"]);
+        assert_eq!(param(&s, "$self").alts, [Slot::Front(0)]);
+        assert_eq!(param(&s, "%args").alts, [Slot::Rest(1)]);
+        assert_eq!(s.invocant_guess.as_deref(), Some("$self"));
+        let foo = key(&s, "foo");
+        assert_eq!(foo.default.as_deref(), Some("\"dflt\""));
+        assert_eq!(foo.via.as_deref(), Some("%args"));
+        assert!(!foo.required);
+        assert!(key(&s, "bar").required);
+        assert!(!key(&s, "baz").required);
+        assert_eq!(s.max_arity, None);
+    }
+
+    #[test]
+    fn hash_with_default_pairs() {
+        let s = spec(golden!("args_hash_defaults"));
+        assert_eq!(param(&s, "%args").alts, [Slot::Rest(0)]);
+        assert_eq!(key(&s, "color").default.as_deref(), Some("\"red\""));
+        assert!(key(&s, "size").required);
+    }
+
+    #[test]
+    fn hashref_argument() {
+        let s = spec(golden!("args_hashref"));
+        assert_eq!(param(&s, "$opts").alts, [Slot::Front(1)]);
+        let v = key(&s, "verbose");
+        assert_eq!(v.via.as_deref(), Some("$opts"));
+        assert_eq!(v.default.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn pop_splice_and_count() {
+        let s = spec(golden!("args_pop_splice"));
+        assert_eq!(names(&s), ["$last", "$first", "$n"]);
+        assert_eq!(param(&s, "$last").alts, [Slot::Back(0)]);
+        assert_eq!(param(&s, "$first").alts, [Slot::Front(0)]);
+        assert_eq!(param(&s, "$n").alts, [Slot::Count]);
+    }
+
+    #[test]
+    fn five_forms_of_default() {
+        let s = spec(golden!("args_defaults"));
+        for (i, (name, d)) in [("$a", "da"), ("$b", "db"), ("$c", "dc"), ("$d", "dd"), ("$e", "de")]
+            .into_iter()
+            .enumerate()
+        {
+            let p = param(&s, name);
+            assert_eq!(p.alts, [Slot::Front(i as u64)], "{}", name);
+            assert_eq!(p.source, "shift", "{}", name);
+            assert_eq!(p.default.as_deref(), Some(format!("\"{}\"", d).as_str()), "{}", name);
+        }
+    }
+
+    #[test]
+    fn forwards() {
+        let s = spec(golden!("args_forward"));
+        let f: Vec<(&str, &str, u32)> = s
+            .forwards
+            .iter()
+            .map(|f| (f.callee.as_str(), f.kind.as_str(), f.from))
+            .collect();
+        assert_eq!(
+            f,
+            [
+                ("SUPER::new", "rest", 1),
+                ("other", "rest", 1),
+                ("other2", "amper", 1),
+                ("other3", "goto", 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn arity_checks() {
+        let s = spec(golden!("args_checks"));
+        let c: Vec<(&str, Option<u64>, bool)> = s
+            .checks
+            .iter()
+            .map(|c| (c.cmp.as_str(), c.n, c.enforced))
+            .collect();
+        assert_eq!(c, [("==", Some(2), true), ("<=", Some(5), true)]);
+        assert_eq!((s.min_arity, s.max_arity), (2, Some(2)));
+    }
+
+    #[test]
+    fn conditional_shift() {
+        let s = spec(golden!("args_conditional"));
+        assert_eq!(names(&s), ["$x", "$opt", "$z"]);
+        let x = param(&s, "$x");
+        assert_eq!((x.alts.as_slice(), x.conditional), (&[Slot::Front(0)][..], false));
+        let opt = param(&s, "$opt");
+        assert_eq!((opt.alts.as_slice(), opt.conditional), (&[Slot::Front(1)][..], true));
+        let z = param(&s, "$z");
+        assert_eq!(z.alts, [Slot::Front(1), Slot::Front(2)]);
+        assert!(z.conditional);
+    }
+
+    #[test]
+    fn elements_after_shift() {
+        let s = spec(golden!("args_elem_after_shift"));
+        assert_eq!(names(&s), ["$first", "$_[0]", "$_[1]"]);
+        assert_eq!(param(&s, "$_[0]").alts, [Slot::Front(1)]);
+        assert_eq!(param(&s, "$_[1]").alts, [Slot::Front(2)]);
+        assert_eq!(s.min_arity, 3);
+    }
+
+    #[test]
+    fn classic_styles_keep_their_shape() {
+        let s = spec(golden!("unpack_args"));
+        assert_eq!(s.style, "unpack");
+        let s = spec(golden!("shift_style"));
+        assert_eq!(s.style, "shift");
+    }
 }

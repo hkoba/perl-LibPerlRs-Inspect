@@ -13,6 +13,9 @@ pub mod lints;
 pub mod logic;
 mod logic_canon;
 pub mod retspec;
+pub mod symexec;
+#[cfg(test)]
+mod test_util;
 pub mod types;
 
 use std::collections::BTreeMap;

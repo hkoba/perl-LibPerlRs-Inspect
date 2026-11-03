@@ -523,53 +523,7 @@ pub(crate) fn canon(ir: &SubIr, env: &mut Env, opts: &WalkOpts, node: &OpNode) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{OpClass, SvLit};
-
-    fn node(id: u32, name: &str, kids: Vec<OpNode>) -> OpNode {
-        OpNode {
-            id,
-            name: name.into(),
-            op_type: 1,
-            class: OpClass::Base,
-            was: None,
-            flags: 0,
-            private: 0,
-            targ: 0,
-            next: None,
-            other: None,
-            detail: OpDetail::None,
-            kids,
-        }
-    }
-
-    fn pad(id: u32, targ: u64) -> OpNode {
-        let mut n = node(id, "padsv", vec![]);
-        n.targ = targ;
-        n
-    }
-
-    fn konst(id: u32, iv: i64) -> OpNode {
-        let mut n = node(id, "const", vec![]);
-        n.detail = OpDetail::Const(SvLit::Iv(iv));
-        n
-    }
-
-    fn ir_with(root: OpNode) -> SubIr {
-        use crate::ir::PadEntry;
-        SubIr {
-            file: None,
-            package: None,
-            lines: None,
-            proto: None,
-            pad: vec![
-                PadEntry { ix: 1, name: Some("$x".into()), typ: None, flags: 0, our_stash: None, line: None, scope: None },
-                PadEntry { ix: 2, name: Some("$y".into()), typ: None, flags: 0, our_stash: None, line: None, scope: None },
-            ],
-            start_id: None,
-            root,
-            anon_subs: vec![],
-        }
-    }
+    use crate::passes::test_util::{ir_with, konst, node, pad};
 
     fn cmp(op: &str, l: OpNode, r: OpNode) -> OpNode {
         node(100, op, vec![l, r])

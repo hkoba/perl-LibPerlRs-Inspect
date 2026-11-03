@@ -1,7 +1,10 @@
 use strict;
 use warnings;
 use Test::More;
+use FindBin;
+use lib "$FindBin::Bin/lib";
 use LibPerlRs::Inspect;
+use Fixtures;
 
 sub args_of {
     my ($src) = @_;
@@ -80,6 +83,105 @@ subtest 'no args' => sub {
     my $a = args_of('sub { 42 }');
     is $a->{style}, 'none', 'style';
     is scalar @{$a->{params}}, 0, 'no params';
+};
+
+# argspec v2: the whole body is executed symbolically (t/lib/Fixtures.pm)
+my %fixture = map { $_->[0] => $_->[1] } @Fixtures::FIXTURES;
+
+sub fixture_args {
+    my ($name) = @_;
+    LibPerlRs::Inspect::analyze(Fixtures::compile($name, $fixture{$name}))->{args};
+}
+
+sub param {
+    my ($a, $name) = @_;
+    my ($p) = grep { ($_->{name} // '') eq $name } @{$a->{params}};
+    $p;
+}
+
+sub key {
+    my ($a, $k) = @_;
+    my ($n) = grep { $_->{key} eq $k } @{$a->{named}};
+    $n;
+}
+
+subtest 'v2: shift, then loop over the rest' => sub {
+    my $a = fixture_args('args_shift_loop');
+    is_deeply [map { $_->{name} } @{$a->{params}}], ['$sum', '@_'], 'names';
+    is_deeply param($a, '$sum')->{alts}, [{front => 0}], '$sum = $_[0]';
+    is_deeply param($a, '@_')->{alts}, [{rest => 1}], 'loop over @_[1..]';
+    is param($a, '@_')->{source}, 'list', 'source list';
+};
+
+subtest 'v2: hash of options' => sub {
+    my $a = fixture_args('args_opts_hash');
+    is_deeply param($a, '%args')->{alts}, [{rest => 1}], '%args = @_[1..]';
+    is key($a, 'foo')->{default}, '"dflt"', 'foo default';
+    is key($a, 'foo')->{via}, '%args', 'foo via %args';
+    ok key($a, 'bar')->{required}, 'bar required';
+    ok !key($a, 'baz')->{required}, 'baz only tested with exists';
+};
+
+subtest 'v2: hash with default pairs' => sub {
+    my $a = fixture_args('args_hash_defaults');
+    is_deeply param($a, '%args')->{alts}, [{rest => 0}], '%args = (..., @_)';
+    is key($a, 'color')->{default}, '"red"', 'color default';
+    ok key($a, 'size'), 'size';
+};
+
+subtest 'v2: hashref argument' => sub {
+    my $a = fixture_args('args_hashref');
+    is_deeply param($a, '$opts')->{alts}, [{front => 1}], '$opts = $_[1]';
+    is key($a, 'verbose')->{via}, '$opts', 'via $opts';
+    is key($a, 'verbose')->{default}, '0', 'verbose default';
+};
+
+subtest 'v2: pop, splice, count' => sub {
+    my $a = fixture_args('args_pop_splice');
+    is_deeply param($a, '$last')->{alts}, [{back => 0}], '$last = last arg';
+    is_deeply param($a, '$first')->{alts}, [{front => 0}], '$first = $_[0]';
+    is_deeply param($a, '$n')->{alts}, ['count'], '$n = scalar(@_)';
+};
+
+subtest 'v2: five forms of default' => sub {
+    my $a = fixture_args('args_defaults');
+    my @d = (['$a', 'da'], ['$b', 'db'], ['$c', 'dc'], ['$d', 'dd'], ['$e', 'de']);
+    for my $i (0 .. $#d) {
+        my ($name, $dflt) = @{$d[$i]};
+        is_deeply param($a, $name)->{alts}, [{front => $i}], "$name slot";
+        is param($a, $name)->{default}, qq{"$dflt"}, "$name default";
+    }
+};
+
+subtest 'v2: forwards' => sub {
+    my $a = fixture_args('args_forward');
+    is_deeply [map { [$_->{callee}, $_->{kind}, $_->{from}] } @{$a->{forwards}}],
+        [['SUPER::new', 'rest', 1], ['other', 'rest', 1], ['other2', 'amper', 1], ['other3', 'goto', 1]],
+        'forwards';
+};
+
+subtest 'v2: arity checks' => sub {
+    my $a = fixture_args('args_checks');
+    is_deeply [map { [$_->{cmp}, $_->{n}, $_->{enforced} ? 1 : 0] } @{$a->{checks}}],
+        [['==', 2, 1], ['<=', 5, 1]], 'checks (as required conditions)';
+    is $a->{min_arity}, 2, 'min';
+    is $a->{max_arity}, 2, 'max';
+};
+
+subtest 'v2: conditional shift' => sub {
+    my $a = fixture_args('args_conditional');
+    ok !param($a, '$x')->{conditional}, '$x unconditional';
+    is_deeply param($a, '$opt')->{alts}, [{front => 1}], '$opt = $_[1]';
+    ok param($a, '$opt')->{conditional}, '$opt conditional';
+    is_deeply param($a, '$z')->{alts}, [{front => 1}, {front => 2}], '$z = $_[1] or $_[2]';
+    ok param($a, '$z')->{conditional}, '$z conditional';
+};
+
+subtest 'v2: elements after shift' => sub {
+    my $a = fixture_args('args_elem_after_shift');
+    is_deeply [map { $_->{name} } @{$a->{params}}], ['$first', '$_[0]', '$_[1]'], 'names';
+    is_deeply param($a, '$_[0]')->{alts}, [{front => 1}], '$_[0] is the 2nd arg';
+    is $a->{min_arity}, 3, 'min_arity';
 };
 
 done_testing;

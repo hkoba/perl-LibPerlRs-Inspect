@@ -35,6 +35,19 @@ our @FIXTURES = (
     [trace_fanout => 'sub { my ($a, $b, $c, $d, $e, $f, $g) = @_; s1() if $a; s2() if $b; s3() if $c; s4() if $d; s5() if $e; s6() if $f; s7() if $g; return done() }'],
     # Full trace (logic full_trace): prefix, loop body, eval body
     [range_trace => "sub {\n my (\$x, \@items) = \@_;\n setup();\n return 0 unless \$x;\n my \$n = 0;\n for my \$it (\@items) {\n  next unless \$it;\n  tally(\$it);\n  last if \$it eq \"stop\";\n  \$n++;\n }\n eval { risky() };\n return \$n;\n}"],
+    # Argument extraction over the whole body (passes::symexec / argspec v2)
+    [args_shift_loop => "sub {\n my \$sum = shift;\n foreach my \$val (\@_) {\n  \$sum += \$val;\n }\n \$sum\n}"],
+    [args_opts_hash => "sub {\n my (\$self, \%args) = \@_;\n my \$x = \$args{foo} // 'dflt';\n my \$y = \$args{bar};\n return \$x . \$y . (exists \$args{baz} ? 1 : 0);\n}"],
+    [args_hash_defaults => "sub {\n my \%args = (color => 'red', \@_);\n \$args{color} . \$args{size}\n}"],
+    [args_hashref => "sub {\n my (\$self, \$opts) = \@_;\n \$opts->{verbose} // 0\n}"],
+    [args_pop_splice => "sub {\n my \$last = pop;\n my \$first = splice(\@_, 0, 1);\n my \$n = \@_;\n [\$first, \$last, \$n]\n}"],
+    [args_defaults => "sub {\n my \$a = shift // 'da';\n my \$b = shift || 'db';\n my \$c = \@_ ? shift : 'dc';\n my \$d = shift;\n \$d //= 'dd';\n my \$e = shift;\n \$e = 'de' unless defined \$e;\n [\$a, \$b, \$c, \$d, \$e]\n}"],
+    [args_forward => "sub {\n my \$self = shift;\n \$self->SUPER::new(\@_);\n other(\@_);\n &other2;\n goto &other3;\n}"],
+    [args_checks => "use Carp; sub {\n croak 'usage' unless \@_ == 2;\n die 'too many' if \@_ > 5;\n my (\$x, \$y) = \@_;\n \$x + \$y\n}"],
+    [args_conditional => "sub {\n my \$x = shift;\n my \$opt;\n if (ref \$x eq 'HASH') {\n  \$opt = shift;\n }\n my \$z = \$_[0];\n [\$x, \$opt, \$z]\n}"],
+    [args_elem_after_shift => "sub {\n my \$first = shift;\n return \$_[0] + \$_[1];\n}"],
+    # Call sites (passes::callsites)
+    [calls_mixed => "sub {\n my (\$o, \@list) = \@_;\n my (\%h, \$cb);\n foo(1, 2);\n Bar::baz(\$o, \@list);\n \$o->meth(a => 1, b => 2);\n Klass->new(\%h);\n &foo;\n foo(\@_);\n &\$cb(3);\n}"],
 );
 
 sub compile {
