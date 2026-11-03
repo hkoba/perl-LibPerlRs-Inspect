@@ -34,6 +34,9 @@ pub enum Sym {
     Ref(Box<Sym>),
     /// A reference to a pad variable of the given frame (`\$x`).
     RefPad { frame: u32, targ: u64 },
+    /// An element of an inlined callee's `@_` that aliases a variable of
+    /// a calling frame (`f($x)` → `$_[0]` is `$x`).
+    Alias { frame: u32, targ: u64 },
     /// Number of elements of a list (`scalar(@_)`).
     Len(Box<Sym>),
     /// Element of an array / hash value.
@@ -200,7 +203,9 @@ impl Sym {
     pub fn mentions_args(&self) -> bool {
         match self {
             Sym::Arg(_) | Sym::ArgBack(_) | Sym::ArgRest(_) | Sym::ArgMid(..) => true,
-            Sym::Const(_) | Sym::RefPad { .. } | Sym::Code(_) | Sym::Unknown(_) => false,
+            Sym::Const(_) | Sym::RefPad { .. } | Sym::Alias { .. } | Sym::Code(_) | Sym::Unknown(_) => {
+                false
+            }
             Sym::List { items, tail } => {
                 items.iter().any(Sym::mentions_args)
                     || tail.as_deref().is_some_and(Sym::mentions_args)
@@ -290,6 +295,7 @@ impl Sym {
                 _ => format!("\\{}", x.display()),
             },
             Sym::RefPad { targ, .. } => format!("\\<pad {}>", targ),
+            Sym::Alias { targ, .. } => format!("<alias {}>", targ),
             Sym::Len(x) => format!("scalar({})", x.display()),
             Sym::Elem(base, key) => {
                 let k = key.display();

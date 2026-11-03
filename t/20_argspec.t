@@ -213,4 +213,66 @@ subtest 'v2: MOP4Import::Opts::m4i_args (installed module)' => sub {
         [['$pack', [{front => 0}]], ['$opts', [{front => 1}]], ['@r', [{rest => 2}]]], 'params';
 };
 
+sub named_summary {
+    my ($a) = @_;
+    +{ map { $_->{key} => {
+        required => $_->{required} ? 1 : 0,
+        aliases  => $_->{aliases},
+        (defined $_->{typ} ? (typ => $_->{typ}) : ()),
+        (defined $_->{default} ? (default => $_->{default}) : ()),
+    } } @{$a->{named}} };
+}
+
+subtest 'v2: helper rearrange inlined' => sub {
+    Fixtures::compile($_, $fixture{$_})
+        for qw(args_helper_rearrange_params args_helper_rearrange_fn);
+    my $code = Fixtures::compile('args_helper_rearrange', $fixture{args_helper_rearrange});
+    my $a = LibPerlRs::Inspect::analyze_with_helpers($code, 'Fixtures::rearrange')->{args};
+    is_deeply [map { [$_->{name}, $_->{alts}] } @{$a->{params}}],
+        [['$name', [{front => 0}]], ['$value', [{front => 1}]]], 'positional form';
+    is_deeply named_summary($a), {
+        name  => {required => 0, aliases => []},
+        value => {required => 0, aliases => ['values']},
+    }, 'named form: name, value (values)';
+    is_deeply $a->{named}[0]{normalize}, ['lc', {strip_prefix => '-'}], 'keys are lc and -stripped';
+};
+
+subtest 'v2: helper Smart::Args::args inlined' => sub {
+    Fixtures::compile($_, $fixture{$_})
+        for qw(args_helper_smart_validate args_helper_smart_args);
+    my $code = Fixtures::compile('args_helper_smart', $fixture{args_helper_smart});
+    my $a = LibPerlRs::Inspect::analyze_with_helpers($code, 'Fixtures::args')->{args};
+    is_deeply [map { [$_->{name}, $_->{alts}] } @{$a->{params}}],
+        [['$self', [{front => 0}]]], 'invocant';
+    is_deeply named_summary($a), {
+        x => {required => 1, aliases => [], typ => 'Int'},
+        y => {required => 0, aliases => [], typ => 'Str'},
+        z => {required => 1, aliases => []},
+        w => {required => 0, aliases => [], typ => 'Int', default => '3'},
+    }, 'keys';
+};
+
+subtest 'v2: CGI::Util::rearrange (installed module)' => sub {
+    plan skip_all => 'CGI::Util is not installed' unless eval { require CGI::Util; 1 };
+    my $code = eval 'package RearrangeUser; CGI::Util->import(qw(rearrange));'
+        . q{ sub { my ($n, $v) = rearrange(['NAME', ['VALUE', 'VALUES']], @_) } } or die $@;
+    my $a = LibPerlRs::Inspect::analyze_with_helpers($code, 'CGI::Util::rearrange')->{args};
+    is_deeply named_summary($a), {
+        name  => {required => 0, aliases => []},
+        value => {required => 0, aliases => ['values']},
+    }, 'named';
+};
+
+subtest 'v2: Smart::Args::args (installed module)' => sub {
+    plan skip_all => 'Smart::Args is not installed' unless eval { require Smart::Args; 1 };
+    my $code = eval 'package SmartUser; BEGIN { Smart::Args->import }'
+        . q{ sub { args my $self, my $x => 'Int', my $y => { isa => 'Str', optional => 1 }; $x } } or die $@;
+    my $a = LibPerlRs::Inspect::analyze_with_helpers($code, 'Smart::Args::args')->{args};
+    is $a->{invocant_guess}, '$self', 'invocant';
+    is_deeply named_summary($a), {
+        x => {required => 1, aliases => [], typ => 'Int'},
+        y => {required => 0, aliases => [], typ => 'Str'},
+    }, 'keys';
+};
+
 done_testing;

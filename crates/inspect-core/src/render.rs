@@ -688,8 +688,17 @@ fn render_pm(ir: &SubIr, n: &OpNode) -> String {
     } else {
         None
     };
+    let (pat, flags) = match &n.detail {
+        OpDetail::Pm { pattern, flags } => (
+            pattern
+                .as_deref()
+                .map_or_else(|| "...".to_string(), |p| p.replace('/', "\\/")),
+            flags.clone().unwrap_or_default(),
+        ),
+        _ => ("...".to_string(), String::new()),
+    };
     let body = if n.name == "match" {
-        "m/.../".to_string()
+        format!("m/{}/{}", pat, flags)
     } else {
         let repl = args
             .iter()
@@ -699,7 +708,7 @@ fn render_pm(ir: &SubIr, n: &OpNode) -> String {
                 _ => render(ir, k),
             })
             .unwrap_or_default();
-        format!("s/.../{}/", repl)
+        format!("s/{}/{}/{}", pat, repl, flags)
     };
     match target {
         Some(t) => format!("{} =~ {}", t, body),

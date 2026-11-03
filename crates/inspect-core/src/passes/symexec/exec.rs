@@ -13,12 +13,13 @@ use super::env::{
     list_pop, list_shift, mk_list, to_hash, view,
 };
 use super::summary::{Assign, CallEvent, ForwardEvent, Precond, Read, ReadKind, Summary};
-use super::value::{Cond, Constraint, HashSeg, Key, Sym};
+use super::value::{Cond, Constraint, HashSeg, Key, Norm, Sym};
 use super::{IrSource, Limits};
 
 const OPF_WANT: u8 = 3;
 const OPF_WANT_LIST: u8 = 3;
 const OPF_STACKED: u8 = 64;
+const OPF_MOD: u8 = 32;
 const OPP_LVAL_INTRO: u8 = 0x80;
 const OPP_TARGET_MY: u8 = 0x10;
 const OPP_MDEREF_EXISTS: u8 = 16;
@@ -159,6 +160,9 @@ pub(crate) struct Exec<'a> {
     inline_rets: Vec<Vec<(Sym, Env)>>,
     /// Number of calls inlined so far.
     inlines: u32,
+    /// Line of the analyzed sub's call being inlined (what writes through
+    /// aliases are recorded at).
+    top_call_line: Option<u32>,
 }
 
 impl<'a> Exec<'a> {
@@ -178,6 +182,7 @@ impl<'a> Exec<'a> {
             ir_stack: Vec::new(),
             inline_rets: Vec::new(),
             inlines: 0,
+            top_call_line: None,
             sum: Summary {
                 env,
                 reads: Vec::new(),
@@ -290,23 +295,104 @@ impl<'a> Exec<'a> {
     }
 
     fn pad_get(&self, targ: u64) -> Sym {
-        self.env
-            .top()
-            .pads
-            .get(&targ)
-            .cloned()
-            .unwrap_or_else(|| self.pad_default(targ))
+        if let Some(v) = self.env.top().pads.get(&targ) {
+            return v.clone();
+        }
+        match self.pad_entry(targ) {
+            Some(e) if e.flags & padname_flags::OUTER != 0 => self
+                .src
+                .outer_value(&self.env.top().callee, targ as u32)
+                .unwrap_or(Sym::Unknown("outer")),
+            _ => self.pad_default(targ),
+        }
+    }
+
+    /// The IR of frame `frame` (0 = the analyzed sub).
+    fn frame_ir(&self, frame: u32) -> &SubIr {
+        match frame {
+            0 => self.ir,
+            k => self.ir_stack.get(k as usize - 1).map_or(self.ir, |a| a),
+        }
+    }
+
+    /// The value behind an alias of a caller's variable.
+    fn resolve(&self, v: Sym) -> Sym {
+        match v {
+            Sym::Alias { frame, targ } => self
+                .env
+                .frames
+                .get(frame as usize)
+                .and_then(|f| f.pads.get(&targ))
+                .cloned()
+                .unwrap_or_else(Sym::undef),
+            Sym::Join(alts) => Sym::Join(alts.into_iter().map(|(c, s)| (c, self.resolve(s))).collect()),
+            v => v,
+        }
+    }
+
+    fn resolve_list(&self, l: Sym) -> Sym {
+        match l {
+            Sym::List { items, tail } => Sym::List {
+                items: items.into_iter().map(|i| self.resolve(i)).collect(),
+                tail,
+            },
+            Sym::Join(alts) => Sym::Join(alts.into_iter().map(|(c, s)| (c, self.resolve_list(s))).collect()),
+            l => l,
+        }
+    }
+
+    /// The element of the current `@_` that an element op (`$_[0]`,
+    /// `$_[$i]`) names, without resolving aliases; None for other ops.
+    fn raw_arg_elem(&mut self, n: &OpNode) -> Option<Sym> {
+        let ix: i64 = match n.name.as_str() {
+            "aelemfast" if is_args_gv(n) => n.private as i8 as i64,
+            "aelem" => {
+                let a = n.kids.first()?.skip_null();
+                let is_args = a.name == "rv2av" && a.kids.first().is_some_and(|k| is_args_gv(k.skip_null()));
+                if !is_args {
+                    return None;
+                }
+                let i = self.eval(n.kids.get(1)?, Want::Scalar);
+                i.const_int()?
+            }
+            "multideref" => {
+                let OpDetail::MultiDeref { steps } = &n.detail else {
+                    return None;
+                };
+                let [st] = steps.as_slice() else {
+                    return None;
+                };
+                if st.base != "gvav" || st.base_name.as_deref() != Some("_") {
+                    return None;
+                }
+                match self.mderef_key(st.key.as_deref(), st.key_targ, true) {
+                    Key::Index(i) => i,
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        Some(list_elem(&self.env.top().args.clone(), ix))
     }
 
     fn pad_set(&mut self, targ: u64, v: Sym, source: &'static str) {
         self.env.top_mut().pads.insert(targ, v.clone());
-        if v.mentions_args() && self.at_top() && !self.sum.assigns.iter().any(|a| a.targ == targ) {
+        if self.at_top() {
+            self.record_assign(targ, v, source);
+        }
+    }
+
+    /// Record the first argument-derived assignment to a pad entry of the
+    /// analyzed sub.
+    fn record_assign(&mut self, targ: u64, v: Sym, source: &'static str) {
+        if v.mentions_args() && !self.sum.assigns.iter().any(|a| a.targ == targ) {
             let seq = self.next_seq();
+            let line = if self.at_top() { self.line } else { self.top_call_line };
             self.sum.assigns.push(Assign {
                 seq,
                 targ,
                 sym: v,
-                line: self.line,
+                line,
                 conditional: self.conditional(),
                 source,
             });
@@ -507,7 +593,7 @@ impl<'a> Exec<'a> {
             }
             "rv2av" => {
                 let t = self.array_target(n);
-                let v = self.array_get(&t);
+                let v = self.resolve_list(self.array_get(&t));
                 match want {
                     Want::List => v,
                     Want::Scalar => list_len(&v),
@@ -557,13 +643,13 @@ impl<'a> Exec<'a> {
                     list_pop(&cur)
                 };
                 self.array_set(&t, rest);
-                v
+                self.resolve(v)
             }
             "splice" => self.eval_splice(n, want),
             "aelemfast" => {
                 let ix = n.private as i8 as i64;
                 if is_args_gv(n) {
-                    let v = list_elem(&self.env.top().args.clone(), ix);
+                    let v = self.resolve(list_elem(&self.env.top().args.clone(), ix));
                     let text = render(self.ir(), n);
                     self.note_read(&v, ReadKind::Elem, None, Some(text));
                     v
@@ -589,7 +675,7 @@ impl<'a> Exec<'a> {
                 let a = self.array_get(&t);
                 let ix = self.eval(ik, Want::Scalar);
                 let v = match ix.const_int() {
-                    Some(i) => list_elem(&a, i),
+                    Some(i) => self.resolve(list_elem(&a, i)),
                     None => Sym::Elem(Box::new(a), Key::Sym(Box::new(ix))),
                 };
                 if matches!(t, ArrayTarget::Args) {
@@ -605,10 +691,7 @@ impl<'a> Exec<'a> {
                 let h = self.eval(hk, Want::List);
                 let via = pad_via(self.ir(), hk);
                 let k = self.eval(kk, Want::Scalar);
-                let key = match k.const_str() {
-                    Some(s) => Key::Str(s),
-                    None => Key::Sym(Box::new(k)),
-                };
+                let key = key_of(k, false);
                 self.lookup(&h, &key, via, n)
             }
             "multideref" => self.eval_mderef(n),
@@ -669,7 +752,10 @@ impl<'a> Exec<'a> {
             }
             "emptyavhv" => Sym::Ref(Box::new(Sym::empty())),
             "srefgen" | "refgen" => {
-                let k = n.kids.first().map(|k| k.skip_null());
+                let k = n.kids.first().map(lvalue_core);
+                if let Some(Sym::Alias { frame, targ }) = k.and_then(|k| self.raw_arg_elem(k)) {
+                    return Sym::RefPad { frame, targ };
+                }
                 match k {
                     Some(k) if k.name == "padsv" => Sym::RefPad {
                         frame: (self.env.frames.len() - 1) as u32,
@@ -830,6 +916,25 @@ impl<'a> Exec<'a> {
                 builtins::apply("-", vec![list_len(&a), Sym::iv(1)])
             }
             "wantarray" => Sym::Unknown("wantarray"),
+            "caller" => {
+                // `caller(N)` (from package DB) sets @DB::args to the
+                // arguments of the N-th caller up
+                let lvl = n
+                    .kids
+                    .first()
+                    .map(|k| self.eval(k, Want::Scalar))
+                    .and_then(|v| v.const_int());
+                if let Some(lvl) = lvl {
+                    let len = self.env.frames.len() as i64;
+                    if lvl >= 1 && lvl < len {
+                        let a = self.env.frames[(len - 1 - lvl) as usize].args.clone();
+                        let a = self.resolve_list(a);
+                        self.env.globals.insert("@DB::args".into(), a);
+                    }
+                }
+                Sym::Unknown("caller")
+            }
+            "subst" => self.eval_subst(n),
             _ => {
                 if let Some(sym) = builtins::op_symbol(name) {
                     let args = self.eval_kids_generic(n);
@@ -871,11 +976,64 @@ impl<'a> Exec<'a> {
 
     fn deref(&self, r: Sym, sigil: char) -> Sym {
         match r {
+            Sym::Join(alts) => Sym::Join(
+                alts.into_iter()
+                    .map(|(c, s)| (c, self.deref(s, sigil)))
+                    .collect(),
+            ),
             Sym::Ref(x) => *x,
             Sym::RefPad { targ, .. } => self.pad_get(targ),
             Sym::Unknown(_) => r,
             other => Sym::Deref(Box::new(other), sigil),
         }
+    }
+
+    /// `$x =~ s/^LIT//`: the target becomes `strip_prefix($x, LIT)`;
+    /// other substitutions make it unknown.
+    fn eval_subst(&mut self, n: &OpNode) -> Sym {
+        let target: Option<&OpNode> = if n.flags & OPF_STACKED != 0 {
+            n.kids.first()
+        } else {
+            None
+        };
+        let repl: Vec<&OpNode> = n
+            .kids
+            .iter()
+            .skip(usize::from(target.is_some()))
+            .filter(|k| !(k.op_type == 0 && k.kids.is_empty()))
+            .collect();
+        let prefix = match &n.detail {
+            OpDetail::Pm {
+                pattern: Some(p),
+                flags: None,
+            } => literal_prefix(p),
+            _ => None,
+        };
+        let empty_repl = match repl.as_slice() {
+            [] => true,
+            [k] => matches!(&k.skip_null().detail, OpDetail::Const(SvLit::Pv(s)) if s.is_empty()),
+            _ => false,
+        };
+        let cur = match target {
+            Some(t) => self.eval(t, Want::Scalar),
+            None if n.targ != 0 => self.pad_get(n.targ),
+            None => self.global("$main::_"),
+        };
+        let new = match (prefix, empty_repl) {
+            (Some(p), true) => match cur.const_str() {
+                Some(s) => Sym::pv(s.strip_prefix(p.as_str()).unwrap_or(&s)),
+                None => Sym::App("strip_prefix", vec![cur, Sym::pv(&p)]),
+            },
+            _ => Sym::App("subst", vec![cur]),
+        };
+        match target {
+            Some(t) => self.assign(t, new, "expr"),
+            None if n.targ != 0 => self.pad_set(n.targ, new, "expr"),
+            None => {
+                self.env.globals.insert("$main::_".into(), new);
+            }
+        }
+        Sym::Unknown("subst")
     }
 
     // ---- arrays ----
@@ -976,7 +1134,10 @@ impl<'a> Exec<'a> {
         v
     }
 
-    fn mderef_key(&self, key: Option<&str>, array: bool) -> Key {
+    fn mderef_key(&self, key: Option<&str>, key_targ: Option<u64>, array: bool) -> Key {
+        if let Some(targ) = key_targ {
+            return key_of(self.pad_get(targ), array);
+        }
         let Some(k) = key else {
             return Key::Sym(Box::new(Sym::Unknown("key")));
         };
@@ -987,16 +1148,16 @@ impl<'a> Exec<'a> {
         }
         if k.starts_with('$') {
             if let Some(targ) = self.pad_by_name(k) {
-                let v = self.pad_get(targ);
-                return match (array, v.const_int(), v.const_str()) {
-                    (true, Some(i), _) => Key::Index(i),
-                    (false, _, Some(s)) => Key::Str(s),
-                    _ => Key::Sym(Box::new(v)),
-                };
+                return key_of(self.pad_get(targ), array);
             }
-            if !array {
-                return Key::Sym(Box::new(Sym::Unknown("key")));
-            }
+            // a package variable (`$_`)
+            let name = k.strip_prefix('$').unwrap_or(k);
+            let full = if name.contains("::") {
+                format!("${}", name)
+            } else {
+                format!("$main::{}", name)
+            };
+            return key_of(self.global(&full), array);
         }
         if array {
             Key::Sym(Box::new(Sym::Unknown("index")))
@@ -1061,12 +1222,21 @@ impl<'a> Exec<'a> {
                     self.deref_container(r, array)
                 }
             };
-            let key = self.mderef_key(st.key.as_deref(), array);
+            let key = self.mderef_key(st.key.as_deref(), st.key_targ, array);
             let v = if array {
                 match &key {
-                    Key::Index(i) => list_elem(&container, *i),
+                    Key::Index(i) => self.resolve(list_elem(&container, *i)),
                     k => Sym::Elem(Box::new(container), k.clone()),
                 }
+            } else if n.private & OPP_MDEREF_EXISTS != 0 && builtins::is_concrete_hash(&container) {
+                // exists on a hash whose keys are all known
+                if let (Key::Str(k), Sym::Hash { segs }) = (&key, &container) {
+                    let found = segs.iter().any(|s| {
+                        matches!(s, HashSeg::Pairs(p) if p.iter().any(|(pk, _)| pk == k))
+                    });
+                    return Sym::iv(i64::from(found));
+                }
+                Sym::Elem(Box::new(container), key.clone())
             } else {
                 let mut defaults: Vec<(Sym, Sym)> = Vec::new();
                 let v = hash_get(&container, &key, &mut |a, d| {
@@ -1098,6 +1268,11 @@ impl<'a> Exec<'a> {
     /// The container a reference value points at, for an element access.
     fn deref_container(&self, r: Sym, array: bool) -> Sym {
         match r {
+            Sym::Join(alts) => Sym::Join(
+                alts.into_iter()
+                    .map(|(c, s)| (c, self.deref_container(s, array)))
+                    .collect(),
+            ),
             Sym::Ref(x) => *x,
             Sym::RefPad { targ, .. } => self.pad_get(targ),
             Sym::Unknown(_) => r,
@@ -1110,7 +1285,19 @@ impl<'a> Exec<'a> {
     // ---- assignment ----
 
     fn assign(&mut self, lhs: &OpNode, v: Sym, source: &'static str) {
-        let l = lhs.skip_null();
+        let l = lvalue_core(lhs);
+        if let Some(raw) = self.raw_arg_elem(l) {
+            if let Sym::Alias { frame, targ } = raw {
+                // an alias of the caller's variable: write through
+                if let Some(f) = self.env.frames.get_mut(frame as usize) {
+                    f.pads.insert(targ, v.clone());
+                }
+                if frame == 0 {
+                    self.record_assign(targ, v, "helper");
+                }
+                return;
+            }
+        }
         match l.name.as_str() {
             "padsv" => self.pad_set(l.targ, v, source),
             "padav" => self.pad_set(l.targ, v, source),
@@ -1135,6 +1322,26 @@ impl<'a> Exec<'a> {
                     self.assign(k, v, source);
                 }
             }
+            "helem" => {
+                let (Some(hk), Some(kk)) = (l.kids.first(), l.kids.get(1)) else {
+                    return;
+                };
+                let h = hk.skip_null();
+                let k = self.eval(kk, Want::Scalar);
+                if let (Some(k), "padhv") = (k.const_str(), h.name.as_str()) {
+                    self.hash_store(h.targ, &k, v);
+                }
+            }
+            "aelem" => {
+                let (Some(ak), Some(ik)) = (l.kids.first(), l.kids.get(1)) else {
+                    return;
+                };
+                let a = ak.skip_null();
+                let i = self.eval(ik, Want::Scalar);
+                if let (Some(i), "padav") = (i.const_int(), a.name.as_str()) {
+                    self.array_store(a.targ, i, v);
+                }
+            }
             "aelemfast" if is_args_gv(l) => {
                 let i = l.private as i8;
                 self.note(format!("modifies caller arg {}", i));
@@ -1150,15 +1357,17 @@ impl<'a> Exec<'a> {
                             self.note(format!("modifies caller arg {}", k));
                             self.sum.writes_to_caller.push((format!("$_[{}]", k), v));
                         }
-                        ("padhv", _, Some(k)) if !k.starts_with('$') => {
-                            let targ = st.base_targ.unwrap_or(0);
-                            let h = self.pad_get(targ);
-                            let mut segs = match h {
-                                Sym::Hash { segs } => segs,
-                                other => vec![HashSeg::Rest(other)],
-                            };
-                            segs.push(HashSeg::Pairs(vec![(k.to_string(), v)]));
-                            self.env.top_mut().pads.insert(targ, Sym::Hash { segs });
+                        ("padhv", _, _) => {
+                            let key = self.mderef_key(st.key.as_deref(), st.key_targ, false);
+                            if let Key::Str(k) = key {
+                                self.hash_store(st.base_targ.unwrap_or(0), &k, v);
+                            }
+                        }
+                        ("padav", _, _) => {
+                            let key = self.mderef_key(st.key.as_deref(), st.key_targ, true);
+                            if let Key::Index(i) = key {
+                                self.array_store(st.base_targ.unwrap_or(0), i, v);
+                            }
                         }
                         _ => {}
                     }
@@ -1166,6 +1375,33 @@ impl<'a> Exec<'a> {
             }
             _ => {}
         }
+    }
+
+    /// `$h{k} = v` on a pad hash.
+    fn hash_store(&mut self, targ: u64, k: &str, v: Sym) {
+        let mut segs = match self.pad_get(targ) {
+            Sym::Hash { segs } => segs,
+            other => vec![HashSeg::Rest(other)],
+        };
+        segs.push(HashSeg::Pairs(vec![(k.to_string(), v)]));
+        self.env.top_mut().pads.insert(targ, Sym::Hash { segs });
+    }
+
+    /// `$a[i] = v` on a pad array of known length.
+    fn array_store(&mut self, targ: u64, i: i64, v: Sym) {
+        let cur = self.pad_get(targ);
+        let new = match view(&cur) {
+            (mut items, None) if i >= 0 => {
+                let i = i as usize;
+                if items.len() <= i {
+                    items.resize(i + 1, Sym::undef());
+                }
+                items[i] = v;
+                mk_list(items, None)
+            }
+            _ => Sym::Unknown("array"),
+        };
+        self.env.top_mut().pads.insert(targ, new);
     }
 
     fn assign_list(&mut self, lhs: &OpNode, rhs: Sym, source: &'static str) {
@@ -1227,13 +1463,16 @@ impl<'a> Exec<'a> {
     fn fork(
         &mut self,
         c: Sym,
-        then: impl FnOnce(&mut Self) -> Sym,
-        els: impl FnOnce(&mut Self) -> Sym,
+        mut then: impl FnMut(&mut Self) -> Sym,
+        mut els: impl FnMut(&mut Self) -> Sym,
     ) -> Sym {
         match c.truth() {
             Some(true) => return then(self),
             Some(false) => return els(self),
             None => {}
+        }
+        if let Some(split) = table_split(&c, self.limits.table_split) {
+            return self.fork_table(split, &mut then, &mut els);
         }
         let width = self.limits.join_width;
         let ct = Cond::new(c, true);
@@ -1258,7 +1497,7 @@ impl<'a> Exec<'a> {
         ef.conds.pop();
 
         for (dead, keep) in [(dt, &cf), (df, &ct)] {
-            if let (Some(d), true) = (dead, self.at_top()) {
+            if let (Some(d), true) = (dead, self.at_top() || keep.sym.mentions_args()) {
                 self.sum.preconds.push(Precond {
                     cond: keep.clone(),
                     line,
@@ -1292,6 +1531,78 @@ impl<'a> Exec<'a> {
         }
     }
 
+    /// `exists $table{f(KEY)}` with KEY a general element: the true arm
+    /// once per key K of the table (with `f(KEY)` = K and KEY known to
+    /// match K), the false arm once with KEY matching none of them.
+    fn fork_table(
+        &mut self,
+        split: TableSplit,
+        then: &mut dyn FnMut(&mut Self) -> Sym,
+        els: &mut dyn FnMut(&mut Self) -> Sym,
+    ) -> Sym {
+        let width = self.limits.join_width;
+        let base = self.env.clone();
+        let line = self.line;
+        let mut outs: Vec<(Vec<Cond>, Sym, Env)> = Vec::new();
+        let mut dead_all: Option<Dead> = None;
+        let arms: Vec<(Option<&String>, Constraint)> = split
+            .keys
+            .iter()
+            .map(|k| {
+                (
+                    Some(k),
+                    Constraint::Matches {
+                        norm: split.norm.clone(),
+                        eq: k.clone(),
+                    },
+                )
+            })
+            .chain(std::iter::once((
+                None,
+                Constraint::NotIn {
+                    norm: split.norm.clone(),
+                    keys: split.keys.clone(),
+                },
+            )))
+            .collect();
+        for (k, constraint) in arms {
+            self.env = base.clone();
+            self.line = line;
+            let general = Sym::Elem(split.list.clone(), Key::Any(constraint));
+            let key_val = match k {
+                Some(k) => Sym::pv(k),
+                None => substitute(&split.key, &split.elem, &general),
+            };
+            for v in self.env.top_mut().pads.values_mut() {
+                *v = substitute(&substitute(v, &split.key, &key_val), &split.elem, &general);
+            }
+            let cond = Cond::new(
+                builtins::apply("eq", vec![split.key.clone(), key_val.clone()]),
+                k.is_some(),
+            );
+            self.env.conds.push(cond.clone());
+            let v = if k.is_some() { then(self) } else { els(self) };
+            self.env.conds.pop();
+            match self.dead.take() {
+                None => outs.push((vec![cond], v, self.env.clone())),
+                Some(d) => dead_all = Some(d),
+            }
+        }
+        let mut it = outs.into_iter();
+        let Some((mut cs, mut val, mut env)) = it.next() else {
+            self.env = base;
+            self.dead = dead_all;
+            return Sym::Unknown("dead");
+        };
+        for (c2, v2, e2) in it {
+            val = join_syms(&cs, val, &c2, v2, width);
+            env = Env::join(env, e2, &cs, &c2, width);
+            cs = Vec::new();
+        }
+        self.env = env;
+        val
+    }
+
     fn eval_logop(&mut self, n: &OpNode, want: Want) -> Sym {
         let Some(lk) = n.kids.first() else {
             return Sym::Unknown("logop");
@@ -1302,11 +1613,11 @@ impl<'a> Exec<'a> {
         };
         let keep = a.clone();
         let v = match n.name.as_str() {
-            "and" => self.fork(a, |x| x.eval(rk, want), |_| keep),
-            "or" => self.fork(a, |_| keep, |x| x.eval(rk, want)),
+            "and" => self.fork(a, |x| x.eval(rk, want), |_| keep.clone()),
+            "or" => self.fork(a, |_| keep.clone(), |x| x.eval(rk, want)),
             _ => {
                 let c = builtins::apply("defined", vec![a]);
-                self.fork(c, |_| keep, |x| x.eval(rk, want))
+                self.fork(c, |_| keep.clone(), |x| x.eval(rk, want))
             }
         };
         if n.name != "and" {
@@ -1337,11 +1648,11 @@ impl<'a> Exec<'a> {
             v
         };
         let v = match n.name.as_str() {
-            "andassign" => self.fork(a, assign, |_| keep),
-            "orassign" => self.fork(a, |_| keep, assign),
+            "andassign" => self.fork(a, assign, |_| keep.clone()),
+            "orassign" => self.fork(a, |_| keep.clone(), assign),
             _ => {
                 let c = builtins::apply("defined", vec![a]);
-                self.fork(c, |_| keep, assign)
+                self.fork(c, |_| keep.clone(), assign)
             }
         };
         self.note_default(&v);
@@ -1360,7 +1671,6 @@ impl<'a> Exec<'a> {
                 match b.name.as_str() {
                     "and" | "or" if b.kids.len() == 2 => {
                         let want_true = b.name == "and";
-                        self.loop_depth += 1;
                         for _ in 0..self.limits.loop_iters {
                             let c = self.eval(&b.kids[0], Want::Scalar);
                             match c.truth().map(|t| t == want_true) {
@@ -1375,14 +1685,15 @@ impl<'a> Exec<'a> {
                                     let base = self.env.clone();
                                     let cond = Cond::new(c, want_true);
                                     self.env.conds.push(cond);
+                                    self.loop_depth += 1;
                                     self.eval(&b.kids[1], Want::Scalar);
+                                    self.loop_depth -= 1;
                                     self.env.conds.pop();
                                     self.after_loop_body(base);
                                     break;
                                 }
                             }
                         }
-                        self.loop_depth -= 1;
                     }
                     _ => {
                         // a bare block (or while (1)): once
@@ -1458,7 +1769,6 @@ impl<'a> Exec<'a> {
             Sym::Join(_) => (Vec::new(), Some(list.clone())),
             l => view(l),
         };
-        self.loop_depth += 1;
         if let Some(b) = body {
             for item in items.into_iter().take(self.limits.loop_iters as usize) {
                 if self.dead.is_some() || self.sum.exhausted {
@@ -1474,12 +1784,13 @@ impl<'a> Exec<'a> {
                     }
                     let base = self.env.clone();
                     set_var(self, Sym::Elem(Box::new(t), Key::Any(Constraint::Unconstrained)));
+                    self.loop_depth += 1;
                     self.eval(b, Want::Scalar);
+                    self.loop_depth -= 1;
                     self.after_loop_body(base);
                 }
             }
         }
-        self.loop_depth -= 1;
         if let (Some(g), Some(prev)) = (&gvar, saved) {
             match prev {
                 Some(v) => self.env.globals.insert(g.clone(), v),
@@ -1536,8 +1847,19 @@ impl<'a> Exec<'a> {
     fn eval_call(&mut self, n: &OpNode, want: Want) -> Sym {
         let (arg_nodes, callee) = self.call_parts(n);
         let mut parts = Vec::new();
+        let frame = (self.env.frames.len() - 1) as u32;
         for a in &arg_nodes {
-            parts.push(self.eval(a, Want::List));
+            let v = self.eval(a, Want::List);
+            // a variable passed to a sub is aliased by its $_[i]
+            let k = a.skip_null();
+            parts.push(if k.name == "padsv" && k.flags & OPF_MOD != 0 {
+                Sym::List {
+                    items: vec![Sym::Alias { frame, targ: k.targ }],
+                    tail: None,
+                }
+            } else {
+                v
+            });
         }
         let (name, method) = match callee {
             Some(Callee::Named(s)) => (s, false),
@@ -1587,7 +1909,18 @@ impl<'a> Exec<'a> {
             args.push(t);
         }
         if !method && name == "UNIVERSAL::isa" {
+            let args = args.into_iter().map(|a| self.resolve(a)).collect();
             return builtins::apply("isa", args);
+        }
+        if !method && (name == "PadWalker::var_name" || name.ends_with("::var_name")) {
+            // the name of the variable a reference points at
+            return match args.get(1) {
+                Some(Sym::RefPad { frame, targ }) => self
+                    .frame_ir(*frame)
+                    .pad_name(*targ)
+                    .map_or_else(Sym::undef, Sym::pv),
+                _ => Sym::undef(),
+            };
         }
 
         // inline the callee when the source supplies its body
@@ -1609,9 +1942,10 @@ impl<'a> Exec<'a> {
                     method,
                 });
             }
+            let resolved = args.iter().map(|a| self.resolve(a.clone())).collect();
             self.sum.calls.push(CallEvent {
                 callee: name.clone(),
-                args: args.clone(),
+                args: resolved,
                 line: self.line,
                 method,
                 inlined: inline_ir.is_some(),
@@ -1622,7 +1956,7 @@ impl<'a> Exec<'a> {
         }
         Sym::Call {
             callee: name,
-            args,
+            args: args.into_iter().map(|a| self.resolve(a)).collect(),
             method,
         }
     }
@@ -1631,6 +1965,9 @@ impl<'a> Exec<'a> {
     /// the value is the join of its `return`s and its last statement.
     fn inline(&mut self, cir: Arc<SubIr>, callee: String, args: Sym, want: Want) -> Sym {
         self.inlines += 1;
+        if self.at_top() {
+            self.top_call_line = self.line;
+        }
         let width = self.limits.join_width;
         let base_conds = self.env.conds.len();
         let line = self.line;
@@ -1834,4 +2171,178 @@ fn pad_via(ir: &SubIr, n: &OpNode) -> Option<String> {
         "rv2hv" | "rv2av" => k.kids.first().and_then(|x| pad_via(ir, x)),
         _ => None,
     }
+}
+
+/// A hash key (or array index) from a value: a constant, a general
+/// element's constraint, or the symbolic value itself.
+fn key_of(v: Sym, array: bool) -> Key {
+    if array {
+        if let Some(i) = v.const_int() {
+            return Key::Index(i);
+        }
+    } else if let Some(s) = v.const_str() {
+        return Key::Str(s);
+    }
+    match v {
+        Sym::Elem(_, Key::Any(c)) => Key::Any(c),
+        v => Key::Sym(Box::new(v)),
+    }
+}
+
+/// The literal after `^` of an anchored pattern without metacharacters
+/// (`^\-` → `-`).
+fn literal_prefix(p: &str) -> Option<String> {
+    let rest = p.strip_prefix('^')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                let e = chars.next()?;
+                if e.is_ascii_alphanumeric() {
+                    return None; // \d, \w, ...
+                }
+                out.push(e);
+            }
+            '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '$' | '^' => {
+                return None;
+            }
+            c => out.push(c),
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// What a table split needs (see `Exec::fork_table`).
+struct TableSplit {
+    /// The concrete keys of the table.
+    keys: Vec<String>,
+    /// The looked-up key `f(KEY)`.
+    key: Sym,
+    /// The general element `KEY` and the list it is an element of.
+    elem: Sym,
+    list: Box<Sym>,
+    norm: Vec<Norm>,
+}
+
+/// `exists $table{f(KEY)}` where the table's keys are all known and KEY is
+/// a general element (the loop variable over a list of unknown length) put
+/// through normalizations `f` (`lc`, `strip_prefix`).
+fn table_split(c: &Sym, limit: u32) -> Option<TableSplit> {
+    let Sym::App("exists", v) = c else {
+        return None;
+    };
+    let [Sym::Elem(table, Key::Sym(key))] = v.as_slice() else {
+        return None;
+    };
+    let Sym::Hash { segs } = table.as_ref() else {
+        return None;
+    };
+    let mut keys: Vec<String> = Vec::new();
+    for seg in segs {
+        let HashSeg::Pairs(p) = seg else {
+            return None;
+        };
+        for (k, _) in p {
+            if !keys.contains(k) {
+                keys.push(k.clone());
+            }
+        }
+    }
+    if keys.is_empty() || keys.len() > limit as usize {
+        return None;
+    }
+    let mut norm = Vec::new();
+    let mut cur: &Sym = key;
+    loop {
+        match cur {
+            Sym::App("lc", a) if a.len() == 1 => {
+                norm.push(Norm::Lc);
+                cur = &a[0];
+            }
+            Sym::App("strip_prefix", a) if a.len() == 2 => {
+                norm.push(Norm::StripPrefix(a[1].const_str()?));
+                cur = &a[0];
+            }
+            _ => break,
+        }
+    }
+    norm.reverse();
+    let Sym::Elem(list, Key::Any(Constraint::Unconstrained)) = cur else {
+        return None;
+    };
+    Some(TableSplit {
+        keys,
+        key: (**key).clone(),
+        elem: cur.clone(),
+        list: list.clone(),
+        norm,
+    })
+}
+
+/// Replace every occurrence of `from` in `s` by `to`.
+fn substitute(s: &Sym, from: &Sym, to: &Sym) -> Sym {
+    if s == from {
+        return to.clone();
+    }
+    let sub = |x: &Sym| substitute(x, from, to);
+    let subb = |x: &Box<Sym>| Box::new(substitute(x, from, to));
+    match s {
+        Sym::List { items, tail } => Sym::List {
+            items: items.iter().map(sub).collect(),
+            tail: tail.as_ref().map(subb),
+        },
+        Sym::Hash { segs } => Sym::Hash {
+            segs: segs
+                .iter()
+                .map(|g| match g {
+                    HashSeg::Pairs(p) => {
+                        HashSeg::Pairs(p.iter().map(|(k, v)| (k.clone(), sub(v))).collect())
+                    }
+                    HashSeg::Rest(r) => HashSeg::Rest(sub(r)),
+                })
+                .collect(),
+        },
+        Sym::Ref(x) => Sym::Ref(subb(x)),
+        Sym::Len(x) => Sym::Len(subb(x)),
+        Sym::Deref(x, c) => Sym::Deref(subb(x), *c),
+        Sym::Keys(x) => Sym::Keys(subb(x)),
+        Sym::Elem(x, k) => Sym::Elem(
+            subb(x),
+            match k {
+                Key::Sym(ks) => key_of(sub(ks), false),
+                k => k.clone(),
+            },
+        ),
+        Sym::App(op, a) => Sym::App(op, a.iter().map(sub).collect()),
+        Sym::Default { arg, default, when } => Sym::Default {
+            arg: subb(arg),
+            default: subb(default),
+            when: *when,
+        },
+        Sym::Call {
+            callee,
+            args,
+            method,
+        } => Sym::Call {
+            callee: callee.clone(),
+            args: args.iter().map(sub).collect(),
+            method: *method,
+        },
+        Sym::Join(alts) => Sym::Join(alts.iter().map(|(c, x)| (c.clone(), sub(x))).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The op an lvalue / reference names: through nulls and the nulled
+/// element ops (`ex-aelem` over an `aelemfast`).
+fn lvalue_core(n: &OpNode) -> &OpNode {
+    let mut cur = n.skip_null();
+    while cur.op_type == 0
+        && matches!(cur.was.as_deref(), Some("aelem" | "helem" | "list"))
+        && !cur.kids.is_empty()
+    {
+        cur = cur.kids[0].skip_null();
+    }
+    cur
 }

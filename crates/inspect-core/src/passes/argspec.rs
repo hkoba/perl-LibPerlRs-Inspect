@@ -111,6 +111,9 @@ pub struct NamedKey {
     /// Other keys that map to the same parameter.
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// Declared type (`Smart::Args` rules: `my $x => 'Int'`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub typ: Option<String>,
 }
 
 /// A call that passes the arguments on.
@@ -362,6 +365,92 @@ fn collect_slots(v: &Sym, out: &mut Vec<Slot>) {
     }
 }
 
+/// Helpers whose calls carry type rules after each declared variable
+/// (`args my $x => 'Int', my $y => { isa => 'Str' }`), by name.
+const TYPED_HELPERS: &[&str] = &["args", "args_pos"];
+
+/// `(variable, type)` from the rules at the calls of [`TYPED_HELPERS`] that
+/// were executed. The rules are constants the helper reads but does not
+/// return, so they are read off the call.
+fn helper_hints(ir: &SubIr, sum: &Summary) -> Vec<(String, String)> {
+    let hinted = |name: &str| TYPED_HELPERS.contains(&name.rsplit("::").next().unwrap_or(name));
+    if !sum.calls.iter().any(|c| c.inlined && hinted(&c.callee)) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for c in super::callsites::call_sites(ir) {
+        let super::callsites::Callee::Named { name } = &c.callee else {
+            continue;
+        };
+        if !hinted(name) {
+            continue;
+        }
+        let Some(node) = ir.node_by_id(c.node) else {
+            continue;
+        };
+        let kids: Vec<&crate::ir::OpNode> = match node.kids.as_slice() {
+            [only] if only.op_type == 0 && !only.kids.is_empty() => only.kids.iter().collect(),
+            ks => ks.iter().collect(),
+        };
+        let kids: Vec<&crate::ir::OpNode> = kids
+            .into_iter()
+            .filter(|k| !matches!(k.name.as_str(), "pushmark" | "padrange"))
+            .filter(|k| !(k.op_type == 0 && k.kids.is_empty()))
+            .collect();
+        let mut var: Option<String> = None;
+        for k in kids {
+            let k = k.skip_null();
+            match (k.name.as_str(), &k.detail) {
+                ("padsv", _) => var = ir.pad_name(k.targ).map(String::from),
+                ("const", OpDetail::Const(crate::ir::SvLit::Pv(t))) => {
+                    if let Some(v) = var.take() {
+                        out.push((v, t.clone()));
+                    }
+                }
+                ("anonhash", _) => {
+                    let items: Vec<&crate::ir::OpNode> =
+                        k.kids.iter().map(|x| x.skip_null()).filter(|x| x.name != "pushmark").collect();
+                    let isa = items.chunks(2).find_map(|kv| match (kv.first(), kv.get(1)) {
+                        (Some(a), Some(b)) => match (&a.detail, &b.detail) {
+                            (
+                                OpDetail::Const(crate::ir::SvLit::Pv(key)),
+                                OpDetail::Const(crate::ir::SvLit::Pv(t)),
+                            ) if key == "isa" || key == "does" => Some(t.clone()),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                    if let (Some(v), Some(t)) = (var.take(), isa) {
+                        out.push((v, t));
+                    }
+                }
+                _ => var = None,
+            }
+        }
+    }
+    out
+}
+
+/// Keys a value was matched under (`Key::Any(Matches)` elements of an
+/// argument-derived hash), in order, without duplicates.
+fn collect_matches(v: &Sym, out: &mut Vec<(String, Vec<Norm>)>) {
+    match v {
+        Sym::Elem(base, Key::Any(symexec::Constraint::Matches { norm, eq })) if base.mentions_args() => {
+            if !out.iter().any(|(k, _)| k == eq) {
+                out.push((eq.clone(), norm.clone()));
+            }
+        }
+        Sym::Elem(base, Key::Str(k)) if base.mentions_args() => {
+            if !out.iter().any(|(x, _)| x == k) {
+                out.push((k.clone(), Vec::new()));
+            }
+        }
+        Sym::Default { arg, .. } => collect_matches(arg, out),
+        Sym::Join(alts) => alts.iter().for_each(|(_, s)| collect_matches(s, out)),
+        _ => {}
+    }
+}
+
 /// `scalar(@_)` (of what remains of the arguments).
 fn is_count(v: &Sym) -> bool {
     matches!(v, Sym::Len(l) if arity_offset(l).is_some())
@@ -392,7 +481,18 @@ fn choose(first: &Sym, last: Option<&Sym>) -> Sym {
 fn default_of(v: &Sym) -> Option<String> {
     match v {
         Sym::Default { default, .. } => Some(default.display()),
-        Sym::Join(alts) => alts.iter().find_map(|(_, s)| default_of(s)),
+        Sym::Join(alts) => alts
+            .iter()
+            .find_map(|(_, s)| default_of(s))
+            .or_else(|| {
+                // a constant taken when the argument is missing
+                alts.iter().find_map(|(conds, s)| {
+                    let missing = conds.iter().any(|c| {
+                        !c.truth && matches!(&c.sym, Sym::App("exists" | "defined", _) | Sym::Len(_))
+                    });
+                    (missing && s.is_const() && *s != Sym::undef()).then(|| s.display())
+                })
+            }),
         _ => None,
     }
 }
@@ -551,6 +651,37 @@ fn spec_from_summary(ir: &SubIr, sum: &Summary) -> ArgSpec {
         }
     }
     params.sort_by_key(|(seq, _, _)| *seq);
+
+    // keys a helper matched against the arguments (`rearrange`): each
+    // variable's matched keys are one parameter, the first its key and
+    // the others aliases
+    let helper_via = sum
+        .calls
+        .iter()
+        .find(|c| c.inlined)
+        .map(|c| local_name(ir, &c.callee));
+    let mut matched_named: Vec<NamedKey> = Vec::new();
+    for a in &sum.assigns {
+        let v = choose(&a.sym, fin.get(&a.targ));
+        let mut keys: Vec<(String, Vec<Norm>)> = Vec::new();
+        collect_matches(&v, &mut keys);
+        let Some(((first, norm), rest)) = keys.split_first() else {
+            continue;
+        };
+        if matched_named.iter().any(|n| n.key == *first) {
+            continue;
+        }
+        matched_named.push(NamedKey {
+            key: first.clone(),
+            via: helper_via.clone(),
+            default: default_of(&v),
+            required: false,
+            line: a.line,
+            normalize: norm.clone(),
+            aliases: rest.iter().map(|(k, _)| k.clone()).collect(),
+            typ: None,
+        });
+    }
     let positional = params
         .iter()
         .flat_map(|(_, p, _)| &p.alts)
@@ -590,6 +721,7 @@ fn spec_from_summary(ir: &SubIr, sum: &Summary) -> ArgSpec {
                     line: r.line,
                     normalize: Vec::new(),
                     aliases: Vec::new(),
+                    typ: None,
                 });
                 named.len() - 1
             }
@@ -607,6 +739,21 @@ fn spec_from_summary(ir: &SubIr, sum: &Summary) -> ArgSpec {
     }
     for n in &mut named {
         n.required = n.default.is_none() && plain.contains(&n.key) && !tested.contains(&n.key);
+    }
+    for m in matched_named {
+        if !named.iter().any(|n| n.key == m.key) {
+            named.push(m);
+        }
+    }
+    // a key whose absence dies is required
+    for p in sum.preconds.iter().filter(|p| p.enforced && !p.conditional && p.cond.truth) {
+        if let Sym::App("exists", x) = &p.cond.sym {
+            if let Some(k) = x.first().and_then(named_key) {
+                if let Some(n) = named.iter_mut().find(|n| n.key == k) {
+                    n.required = true;
+                }
+            }
+        }
     }
 
     // arity checks
@@ -686,6 +833,14 @@ fn spec_from_summary(ir: &SubIr, sum: &Summary) -> ArgSpec {
         max_arity = Some(max_arity.map_or(h, |m| m.min(h)));
     }
     let notes = sum.notes.clone();
+    for (var, typ) in helper_hints(ir, sum) {
+        if let Some(n) = named.iter_mut().find(|n| n.key == var[1..]) {
+            n.typ.get_or_insert(typ.clone());
+        }
+        if let Some(p) = params.iter_mut().find(|p| p.name.as_deref() == Some(var.as_str())) {
+            p.typ.get_or_insert(typ);
+        }
+    }
     ArgSpec {
         style,
         min_arity: lo.max(elem_bound),
@@ -910,6 +1065,55 @@ mod tests {
         assert_eq!(h, [("m4i_args", true)]);
         assert!(s.forwards.is_empty());
         assert_eq!(key(&s, "destpkg").via.as_deref(), Some("$opts"));
+    }
+
+    fn rearrange_helpers() -> Helpers {
+        let ir = |g: &str| std::sync::Arc::new(ir_of(g));
+        Helpers(vec![
+            ("Fixtures::rearrange", ir(golden!("args_helper_rearrange_fn"))),
+            ("Fixtures::_rearrange_params", ir(golden!("args_helper_rearrange_params"))),
+        ])
+    }
+
+    #[test]
+    fn helper_rearrange_inlined() {
+        // my ($name, $value) = rearrange(['NAME', ['VALUE', 'VALUES']], @_)
+        let ir = ir_of(golden!("args_helper_rearrange"));
+        let s = analyze_args_with(&ir, &rearrange_helpers(), &Limits::default());
+        eprintln!("{}", serde_json::to_string_pretty(&s).unwrap());
+        assert_eq!(s.style, "helper");
+        assert_eq!(param(&s, "$name").alts, [Slot::Front(0)]);
+        assert_eq!(param(&s, "$value").alts, [Slot::Front(1)]);
+        let name = key(&s, "name");
+        assert_eq!(name.normalize, [Norm::Lc, Norm::StripPrefix("-".into())]);
+        let value = key(&s, "value");
+        assert_eq!(value.aliases, ["values"]);
+    }
+
+    #[test]
+    fn helper_smart_args_inlined() {
+        // args my $self, my $x => 'Int', my $y => { isa => 'Str', optional => 1 }, my $z;
+        let ir = |g: &str| std::sync::Arc::new(ir_of(g));
+        let src = Helpers(vec![
+            ("Fixtures::args", ir(golden!("args_helper_smart_args"))),
+            ("Fixtures::_validate_by_rule", ir(golden!("args_helper_smart_validate"))),
+        ]);
+        let user = ir_of(golden!("args_helper_smart"));
+        let s = analyze_args_with(&user, &src, &Limits::default());
+        eprintln!("{}", serde_json::to_string_pretty(&s).unwrap());
+        assert_eq!(s.style, "helper");
+        assert_eq!(names(&s), ["$self"]);
+        assert_eq!(param(&s, "$self").alts, [Slot::Front(0)]);
+        assert_eq!(s.invocant_guess.as_deref(), Some("$self"));
+        assert!(key(&s, "x").required);
+        assert!(!key(&s, "y").required);
+        assert!(key(&s, "z").required);
+        assert_eq!(key(&s, "x").typ.as_deref(), Some("Int"));
+        assert_eq!(key(&s, "y").typ.as_deref(), Some("Str"));
+        assert_eq!(key(&s, "w").default.as_deref(), Some("3"));
+        assert!(!key(&s, "w").required);
+        assert_eq!(key(&s, "x").line, Some(2), "the line of the call");
+        assert_eq!(param(&s, "$self").line, Some(2));
     }
 
     #[test]

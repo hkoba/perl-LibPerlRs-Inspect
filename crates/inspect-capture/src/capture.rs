@@ -230,6 +230,13 @@ impl Capturer {
                 kids.push(self.walk(kid.as_ptr()));
             }
         }
+        let mut detail = detail;
+        if let OpDetail::Pm { pattern, .. } = &mut detail {
+            // a runtime pattern: what PM_GETRE holds is not its source
+            if kids.iter().any(|k| k.name == "regcomp") {
+                *pattern = None;
+            }
+        }
 
         OpNode {
             id,
@@ -309,7 +316,7 @@ impl Capturer {
                 next: None,
                 last: None,
             }, // resolved in pass 2
-            OPclass::OPclass_PMOP => OpDetail::Pm { pattern: None },
+            OPclass::OPclass_PMOP => self.pm_detail(o),
             OPclass::OPclass_UNOP_AUX => {
                 let aux = unsafe { (*(o as *const libperl_sys::unop_aux)).op_aux };
                 match op_name_of_type(ty).as_str() {
@@ -418,6 +425,7 @@ impl Capturer {
                     }
                     _ => (None, None),
                 };
+                let mut key_targ: Option<u64> = None;
                 let key = match actions & MDEREF_INDEX_MASK {
                     MDEREF_INDEX_CONST => {
                         items = items.add(1);
@@ -435,6 +443,7 @@ impl Capturer {
                     MDEREF_INDEX_PADSV => {
                         items = items.add(1);
                         let po = (*items).pad_offset as u64;
+                        key_targ = Some(po);
                         Some(
                             self.pad_name_at(po)
                                 .unwrap_or_else(|| format!("$pad{}", po)),
@@ -455,6 +464,7 @@ impl Capturer {
                     base_targ,
                     base_name,
                     key,
+                    key_targ,
                 });
                 if actions & MDEREF_FLAG_LAST != 0 {
                     break;
@@ -532,6 +542,51 @@ impl Capturer {
                 off = end;
             }
             OpDetail::MultiConcat { pieces }
+        }
+    }
+
+    /// The pattern source and modifiers of a PMOP (`PM_GETRE` →
+    /// `RX_PRECOMP` / `RX_PRELEN`; modifiers from `op_pmflags`).
+    fn pm_detail(&self, o: *const op) -> OpDetail {
+        // op_pmflags bits (op_reg_common.h / op.h; the same since 5.22)
+        const PM_FLAGS: &[(u32, &str)] = &[
+            (1 << 0, "m"),
+            (1 << 1, "s"),
+            (1 << 2, "i"),
+            (1 << 3, "x"),
+            (1 << 4, "x"),
+            (1 << 5, "n"),
+            (1 << 6, "p"),
+            (1 << 23, "g"),
+        ];
+        let pm = o as *const libperl_sys::pmop;
+        let pmflags = unsafe { (*pm).op_pmflags };
+        #[cfg(perl_useithreads)]
+        let rx = unsafe {
+            *(*self.my_perl).Iregex_pad.offset((*pm).op_pmoffset as isize) as *const sv
+        };
+        #[cfg(not(perl_useithreads))]
+        let rx = unsafe { (*pm).op_pmregexp as *const sv };
+        let pattern = if rx.is_null() || SvTYPE(rx) != svtype::SVt_REGEXP {
+            None
+        } else {
+            unsafe {
+                let p = libperl_sys::RX_PRECOMP(rx as *const libperl_sys::SV);
+                let n = libperl_sys::RX_PRELEN(rx as *const libperl_sys::SV);
+                (!p.is_null() && n >= 0).then(|| {
+                    let bytes = std::slice::from_raw_parts(p as *const u8, n as usize);
+                    String::from_utf8_lossy(bytes).into_owned()
+                })
+            }
+        };
+        let flags: String = PM_FLAGS
+            .iter()
+            .filter(|(bit, _)| pmflags & bit != 0)
+            .map(|(_, c)| *c)
+            .collect();
+        OpDetail::Pm {
+            pattern,
+            flags: (!flags.is_empty()).then_some(flags),
         }
     }
 
@@ -653,7 +708,7 @@ fn sv_detail(sv: *const sv) -> OpDetail {
 }
 
 /// Copy an SV out as a literal value (built from the official API only)
-fn sv_lit(sv: *const sv) -> SvLit {
+pub(crate) fn sv_lit(sv: *const sv) -> SvLit {
     if sv.is_null() {
         return SvLit::Other("NULL".into());
     }

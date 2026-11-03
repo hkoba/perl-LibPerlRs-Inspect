@@ -167,6 +167,8 @@ fn normalize_default(alts: &[(Vec<Cond>, Sym)]) -> Option<Sym> {
     let (vt, vf) = if k1.truth { (v1, v2) } else { (v2, v1) };
     let when = match &k1.sym {
         Sym::App("defined", x) if x.len() == 1 && x[0] == *vt => DefaultWhen::Undef,
+        // `exists $h{k} ? (value of $h{k}) : d`
+        Sym::App("exists", x) if x.len() == 1 && covers(vt, &x[0]) => DefaultWhen::Missing,
         Sym::Len(l) if l.as_arg_slice().is_some_and(|(f, _)| *vt == Sym::Arg(f)) => {
             DefaultWhen::Missing
         }
@@ -178,6 +180,19 @@ fn normalize_default(alts: &[(Vec<Cond>, Sym)]) -> Option<Sym> {
         default: Box::new(vf.clone()),
         when,
     })
+}
+
+/// Whether `v` may be `x` itself (every alternative of `x` is among those
+/// of `v`).
+fn covers(v: &Sym, x: &Sym) -> bool {
+    fn alts(s: &Sym) -> Vec<&Sym> {
+        match s {
+            Sym::Join(a) => a.iter().map(|(_, s)| s).collect(),
+            s => vec![s],
+        }
+    }
+    let vs = alts(v);
+    v == x || alts(x).iter().all(|a| vs.contains(a))
 }
 
 // ---- list values ----
@@ -209,7 +224,9 @@ pub fn view(l: &Sym) -> (Vec<Sym>, Option<Sym>) {
             }
             (items, None)
         }
-        Sym::Const(_) | Sym::Ref(_) | Sym::Code(_) | Sym::RefPad { .. } => (vec![l.clone()], None),
+        Sym::Const(_) | Sym::Ref(_) | Sym::Code(_) | Sym::RefPad { .. } | Sym::Alias { .. } => {
+            (vec![l.clone()], None)
+        }
         Sym::Join(alts) => {
             // alternatives that are lists of one length: a list of joins
             let views: Vec<(&Vec<Cond>, Vec<Sym>, Option<Sym>)> = alts
@@ -221,10 +238,18 @@ pub fn view(l: &Sym) -> (Vec<Sym>, Option<Sym>) {
                     (i, t) => (c, i, t),
                 })
                 .collect();
-            let n = views.first().map_or(0, |v| v.1.len());
-            if views.iter().all(|(_, i, t)| t.is_none() && i.len() == n) {
+            // (a shorter list reads as undef at the missing positions)
+            let n = views.iter().map(|v| v.1.len()).max().unwrap_or(0);
+            if views.iter().all(|(_, _, t)| t.is_none()) {
                 let items = (0..n)
-                    .map(|k| join_of(views.iter().map(|(c, i, _)| ((*c).clone(), i[k].clone())).collect()))
+                    .map(|k| {
+                        join_of(
+                            views
+                                .iter()
+                                .map(|(c, i, _)| ((*c).clone(), i.get(k).cloned().unwrap_or_else(Sym::undef)))
+                                .collect(),
+                        )
+                    })
                     .collect();
                 (items, None)
             } else {

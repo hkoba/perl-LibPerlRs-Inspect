@@ -110,9 +110,10 @@ fn rec(node: &OpNode, depth: usize, ir: &SubIr, out: &mut String) {
             " loop(redo->{:?} next->{:?} last->{:?})",
             redo, next, last
         )),
-        OpDetail::Pm { pattern } => out.push_str(&format!(
-            " pm={}",
-            pattern.as_deref().unwrap_or("<undecoded>")
+        OpDetail::Pm { pattern, flags } => out.push_str(&format!(
+            " pm={}{}",
+            pattern.as_deref().unwrap_or("<runtime>"),
+            flags.as_deref().map(|f| format!(" /{}", f)).unwrap_or_default()
         )),
         OpDetail::MultiDeref { steps } => {
             out.push_str(" mderef=");

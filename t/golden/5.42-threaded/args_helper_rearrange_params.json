@@ -1,0 +1,2698 @@
+{
+   "file" : "(eval)",
+   "lines" : [
+      2,
+      27
+   ],
+   "package" : "Fixtures",
+   "pad" : [
+      {
+         "flags" : 0,
+         "ix" : 1,
+         "line" : 2,
+         "name" : "$order",
+         "scope" : [
+            3,
+            27
+         ]
+      },
+      {
+         "flags" : 4,
+         "ix" : 2,
+         "line" : 2,
+         "name" : "@param",
+         "scope" : [
+            3,
+            27
+         ]
+      },
+      {
+         "flags" : 4,
+         "ix" : 11,
+         "line" : 9,
+         "name" : "$i",
+         "scope" : [
+            10,
+            27
+         ]
+      },
+      {
+         "flags" : 0,
+         "ix" : 12,
+         "line" : 9,
+         "name" : "%pos",
+         "scope" : [
+            10,
+            27
+         ]
+      },
+      {
+         "flags" : 4,
+         "ix" : 24,
+         "line" : 15,
+         "name" : "%params_as_hash",
+         "scope" : [
+            16,
+            27
+         ]
+      },
+      {
+         "flags" : 4,
+         "ix" : 26,
+         "line" : 16,
+         "name" : "@result",
+         "scope" : [
+            17,
+            27
+         ]
+      },
+      {
+         "flags" : 4,
+         "ix" : 27,
+         "line" : 16,
+         "name" : "%leftover",
+         "scope" : [
+            17,
+            27
+         ]
+      },
+      {
+         "flags" : 0,
+         "ix" : 29,
+         "line" : 18,
+         "name" : "$k",
+         "scope" : [
+            19,
+            24
+         ]
+      },
+      {
+         "flags" : 0,
+         "ix" : 34,
+         "line" : 19,
+         "name" : "$key",
+         "scope" : [
+            20,
+            24
+         ]
+      }
+   ],
+   "proto" : null,
+   "root" : {
+      "class" : "UNOP",
+      "flags" : 4,
+      "id" : 0,
+      "kids" : [
+         {
+            "class" : "LISTOP",
+            "flags" : 12,
+            "id" : 1,
+            "kids" : [
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 2
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 2,
+                  "name" : "nextstate",
+                  "next" : 5,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "BINOP",
+                  "flags" : 69,
+                  "id" : 3,
+                  "kids" : [
+                     {
+                        "class" : "UNOP",
+                        "flags" : 7,
+                        "id" : 4,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 128,
+                              "id" : 5,
+                              "name" : "padrange",
+                              "next" : 3,
+                              "op_type" : 398,
+                              "private" : 130,
+                              "targ" : 1
+                           },
+                           {
+                              "class" : "UNOP",
+                              "flags" : 7,
+                              "id" : 6,
+                              "kids" : [
+                                 {
+                                    "class" : "PADOP",
+                                    "detail" : {
+                                       "Gv" : {
+                                          "name" : "_",
+                                          "stash" : "main"
+                                       }
+                                    },
+                                    "flags" : 2,
+                                    "id" : 7,
+                                    "name" : "gv",
+                                    "next" : 6,
+                                    "op_type" : 7,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 }
+                              ],
+                              "name" : "rv2av",
+                              "next" : 4,
+                              "op_type" : 137,
+                              "private" : 3,
+                              "targ" : 4
+                           }
+                        ],
+                        "name" : "null",
+                        "next" : 9,
+                        "op_type" : 0,
+                        "private" : 0,
+                        "targ" : 161,
+                        "was" : "list"
+                     },
+                     {
+                        "class" : "UNOP",
+                        "flags" : 191,
+                        "id" : 8,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 178,
+                              "id" : 9,
+                              "name" : "pushmark",
+                              "next" : 10,
+                              "op_type" : 3,
+                              "private" : 128,
+                              "targ" : 0
+                           },
+                           {
+                              "class" : "OP",
+                              "flags" : 178,
+                              "id" : 10,
+                              "name" : "padsv",
+                              "next" : 11,
+                              "op_type" : 9,
+                              "private" : 128,
+                              "targ" : 1
+                           },
+                           {
+                              "class" : "OP",
+                              "flags" : 179,
+                              "id" : 11,
+                              "name" : "padav",
+                              "next" : 8,
+                              "op_type" : 11,
+                              "private" : 128,
+                              "targ" : 2
+                           }
+                        ],
+                        "name" : "null",
+                        "next" : 3,
+                        "op_type" : 0,
+                        "private" : 0,
+                        "targ" : 161,
+                        "was" : "list"
+                     }
+                  ],
+                  "name" : "aassign",
+                  "next" : 12,
+                  "op_type" : 38,
+                  "private" : 16,
+                  "targ" : 5
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 3
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 12,
+                  "name" : "nextstate",
+                  "next" : 15,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "UNOP",
+                  "flags" : 5,
+                  "id" : 13,
+                  "kids" : [
+                     {
+                        "class" : "LOGOP",
+                        "flags" : 5,
+                        "id" : 14,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 2,
+                              "id" : 15,
+                              "name" : "padav",
+                              "next" : 14,
+                              "op_type" : 11,
+                              "private" : 32,
+                              "targ" : 2
+                           },
+                           {
+                              "class" : "LISTOP",
+                              "flags" : 4,
+                              "id" : 16,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 2,
+                                    "id" : 17,
+                                    "name" : "pushmark",
+                                    "next" : 18,
+                                    "op_type" : 3,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 2,
+                                    "id" : 18,
+                                    "name" : "emptyavhv",
+                                    "next" : 16,
+                                    "op_type" : 165,
+                                    "private" : 0,
+                                    "targ" : 6
+                                 }
+                              ],
+                              "name" : "return",
+                              "next" : 19,
+                              "op_type" : 212,
+                              "private" : 0,
+                              "targ" : 0
+                           }
+                        ],
+                        "name" : "or",
+                        "next" : 19,
+                        "op_type" : 184,
+                        "other" : 17,
+                        "private" : 1,
+                        "targ" : 0
+                     }
+                  ],
+                  "name" : "null",
+                  "next" : 19,
+                  "op_type" : 0,
+                  "private" : 1,
+                  "targ" : 0
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 4
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 19,
+                  "name" : "nextstate",
+                  "next" : 25,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "UNOP",
+                  "flags" : 5,
+                  "id" : 20,
+                  "kids" : [
+                     {
+                        "class" : "LOGOP",
+                        "flags" : 5,
+                        "id" : 21,
+                        "kids" : [
+                           {
+                              "class" : "BINOP",
+                              "flags" : 6,
+                              "id" : 22,
+                              "kids" : [
+                                 {
+                                    "class" : "UNOP",
+                                    "flags" : 6,
+                                    "id" : 23,
+                                    "kids" : [
+                                       {
+                                          "class" : "UNOP",
+                                          "flags" : 6,
+                                          "id" : 24,
+                                          "kids" : [
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 18,
+                                                "id" : 25,
+                                                "name" : "aelemfast_lex",
+                                                "next" : 23,
+                                                "op_type" : 139,
+                                                "private" : 0,
+                                                "targ" : 2
+                                             },
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 2,
+                                                "id" : 26,
+                                                "name" : "null",
+                                                "next" : 24,
+                                                "op_type" : 0,
+                                                "private" : 0,
+                                                "targ" : 5,
+                                                "was" : "const"
+                                             }
+                                          ],
+                                          "name" : "null",
+                                          "next" : 23,
+                                          "op_type" : 0,
+                                          "private" : 2,
+                                          "targ" : 141,
+                                          "was" : "aelem"
+                                       }
+                                    ],
+                                    "name" : "ref",
+                                    "next" : 27,
+                                    "op_type" : 22,
+                                    "private" : 1,
+                                    "targ" : 7
+                                 },
+                                 {
+                                    "class" : "SVOP",
+                                    "detail" : {
+                                       "Const" : {
+                                          "Pv" : "HASH"
+                                       }
+                                    },
+                                    "flags" : 2,
+                                    "id" : 27,
+                                    "name" : "const",
+                                    "next" : 22,
+                                    "op_type" : 5,
+                                    "private" : 0,
+                                    "targ" : 30
+                                 }
+                              ],
+                              "name" : "seq",
+                              "next" : 21,
+                              "op_type" : 90,
+                              "private" : 2,
+                              "targ" : 0
+                           },
+                           {
+                              "class" : "LISTOP",
+                              "flags" : 5,
+                              "id" : 28,
+                              "kids" : [
+                                 {
+                                    "class" : "COP",
+                                    "detail" : {
+                                       "Cop" : {
+                                          "file" : "(eval)",
+                                          "line" : 5
+                                       }
+                                    },
+                                    "flags" : 1,
+                                    "id" : 29,
+                                    "name" : "null",
+                                    "next" : 32,
+                                    "op_type" : 0,
+                                    "private" : 0,
+                                    "targ" : 202,
+                                    "was" : "nextstate"
+                                 },
+                                 {
+                                    "class" : "BINOP",
+                                    "flags" : 69,
+                                    "id" : 30,
+                                    "kids" : [
+                                       {
+                                          "class" : "UNOP",
+                                          "flags" : 7,
+                                          "id" : 31,
+                                          "kids" : [
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 2,
+                                                "id" : 32,
+                                                "name" : "pushmark",
+                                                "next" : 37,
+                                                "op_type" : 3,
+                                                "private" : 0,
+                                                "targ" : 0
+                                             },
+                                             {
+                                                "class" : "UNOP",
+                                                "flags" : 7,
+                                                "id" : 33,
+                                                "kids" : [
+                                                   {
+                                                      "class" : "LISTOP",
+                                                      "flags" : 6,
+                                                      "id" : 34,
+                                                      "kids" : [
+                                                         {
+                                                            "class" : "COP",
+                                                            "detail" : {
+                                                               "Cop" : {
+                                                                  "file" : "(eval)",
+                                                                  "line" : 5
+                                                               }
+                                                            },
+                                                            "flags" : 1,
+                                                            "id" : 35,
+                                                            "name" : "null",
+                                                            "next" : 37,
+                                                            "op_type" : 0,
+                                                            "private" : 0,
+                                                            "targ" : 202,
+                                                            "was" : "nextstate"
+                                                         },
+                                                         {
+                                                            "class" : "UNOP",
+                                                            "flags" : 6,
+                                                            "id" : 36,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "OP",
+                                                                  "flags" : 18,
+                                                                  "id" : 37,
+                                                                  "name" : "aelemfast_lex",
+                                                                  "next" : 33,
+                                                                  "op_type" : 139,
+                                                                  "private" : 0,
+                                                                  "targ" : 2
+                                                               },
+                                                               {
+                                                                  "class" : "OP",
+                                                                  "flags" : 2,
+                                                                  "id" : 38,
+                                                                  "name" : "null",
+                                                                  "next" : 36,
+                                                                  "op_type" : 0,
+                                                                  "private" : 0,
+                                                                  "targ" : 5,
+                                                                  "was" : "const"
+                                                               }
+                                                            ],
+                                                            "name" : "null",
+                                                            "next" : 34,
+                                                            "op_type" : 0,
+                                                            "private" : 2,
+                                                            "targ" : 141,
+                                                            "was" : "aelem"
+                                                         }
+                                                      ],
+                                                      "name" : "scope",
+                                                      "next" : 33,
+                                                      "op_type" : 207,
+                                                      "private" : 0,
+                                                      "targ" : 0
+                                                   }
+                                                ],
+                                                "name" : "rv2hv",
+                                                "next" : 40,
+                                                "op_type" : 152,
+                                                "private" : 2,
+                                                "targ" : 8
+                                             }
+                                          ],
+                                          "name" : "null",
+                                          "next" : 40,
+                                          "op_type" : 0,
+                                          "private" : 0,
+                                          "targ" : 161,
+                                          "was" : "list"
+                                       },
+                                       {
+                                          "class" : "UNOP",
+                                          "flags" : 7,
+                                          "id" : 39,
+                                          "kids" : [
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 2,
+                                                "id" : 40,
+                                                "name" : "pushmark",
+                                                "next" : 41,
+                                                "op_type" : 3,
+                                                "private" : 0,
+                                                "targ" : 0
+                                             },
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 179,
+                                                "id" : 41,
+                                                "name" : "padav",
+                                                "next" : 30,
+                                                "op_type" : 11,
+                                                "private" : 0,
+                                                "targ" : 2
+                                             }
+                                          ],
+                                          "name" : "null",
+                                          "next" : 30,
+                                          "op_type" : 0,
+                                          "private" : 0,
+                                          "targ" : 161,
+                                          "was" : "list"
+                                       }
+                                    ],
+                                    "name" : "aassign",
+                                    "next" : 67,
+                                    "op_type" : 38,
+                                    "private" : 16,
+                                    "targ" : 9
+                                 }
+                              ],
+                              "name" : "scope",
+                              "next" : 20,
+                              "op_type" : 207,
+                              "private" : 0,
+                              "targ" : 0
+                           },
+                           {
+                              "class" : "LISTOP",
+                              "flags" : 13,
+                              "id" : 42,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 1,
+                                    "id" : 43,
+                                    "name" : "enter",
+                                    "next" : 44,
+                                    "op_type" : 205,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "COP",
+                                    "detail" : {
+                                       "Cop" : {
+                                          "file" : "(eval)",
+                                          "line" : 7
+                                       }
+                                    },
+                                    "flags" : 1,
+                                    "id" : 44,
+                                    "name" : "nextstate",
+                                    "next" : 51,
+                                    "op_type" : 202,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "UNOP",
+                                    "flags" : 5,
+                                    "id" : 45,
+                                    "kids" : [
+                                       {
+                                          "class" : "LOGOP",
+                                          "flags" : 5,
+                                          "id" : 46,
+                                          "kids" : [
+                                             {
+                                                "class" : "UNOP",
+                                                "flags" : 14,
+                                                "id" : 47,
+                                                "kids" : [
+                                                   {
+                                                      "class" : "LOGOP",
+                                                      "flags" : 6,
+                                                      "id" : 48,
+                                                      "kids" : [
+                                                         {
+                                                            "class" : "UNOP",
+                                                            "flags" : 6,
+                                                            "id" : 49,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "UNOP",
+                                                                  "flags" : 6,
+                                                                  "id" : 50,
+                                                                  "kids" : [
+                                                                     {
+                                                                        "class" : "OP",
+                                                                        "flags" : 18,
+                                                                        "id" : 51,
+                                                                        "name" : "aelemfast_lex",
+                                                                        "next" : 49,
+                                                                        "op_type" : 139,
+                                                                        "private" : 0,
+                                                                        "targ" : 2
+                                                                     },
+                                                                     {
+                                                                        "class" : "OP",
+                                                                        "flags" : 2,
+                                                                        "id" : 52,
+                                                                        "name" : "null",
+                                                                        "next" : 50,
+                                                                        "op_type" : 0,
+                                                                        "private" : 0,
+                                                                        "targ" : 5,
+                                                                        "was" : "const"
+                                                                     }
+                                                                  ],
+                                                                  "name" : "null",
+                                                                  "next" : 49,
+                                                                  "op_type" : 0,
+                                                                  "private" : 2,
+                                                                  "targ" : 141,
+                                                                  "was" : "aelem"
+                                                               }
+                                                            ],
+                                                            "name" : "defined",
+                                                            "next" : 48,
+                                                            "op_type" : 43,
+                                                            "private" : 1,
+                                                            "targ" : 0
+                                                         },
+                                                         {
+                                                            "class" : "BINOP",
+                                                            "flags" : 6,
+                                                            "id" : 53,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "LISTOP",
+                                                                  "flags" : 6,
+                                                                  "id" : 54,
+                                                                  "kids" : [
+                                                                     {
+                                                                        "class" : "OP",
+                                                                        "flags" : 2,
+                                                                        "id" : 55,
+                                                                        "name" : "null",
+                                                                        "next" : 57,
+                                                                        "op_type" : 0,
+                                                                        "private" : 0,
+                                                                        "targ" : 3,
+                                                                        "was" : "pushmark"
+                                                                     },
+                                                                     {
+                                                                        "class" : "UNOP",
+                                                                        "flags" : 6,
+                                                                        "id" : 56,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "OP",
+                                                                              "flags" : 18,
+                                                                              "id" : 57,
+                                                                              "name" : "aelemfast_lex",
+                                                                              "next" : 59,
+                                                                              "op_type" : 139,
+                                                                              "private" : 0,
+                                                                              "targ" : 2
+                                                                           },
+                                                                           {
+                                                                              "class" : "OP",
+                                                                              "flags" : 2,
+                                                                              "id" : 58,
+                                                                              "name" : "null",
+                                                                              "next" : 56,
+                                                                              "op_type" : 0,
+                                                                              "private" : 0,
+                                                                              "targ" : 5,
+                                                                              "was" : "const"
+                                                                           }
+                                                                        ],
+                                                                        "name" : "null",
+                                                                        "next" : 59,
+                                                                        "op_type" : 0,
+                                                                        "private" : 2,
+                                                                        "targ" : 141,
+                                                                        "was" : "aelem"
+                                                                     },
+                                                                     {
+                                                                        "class" : "SVOP",
+                                                                        "detail" : {
+                                                                           "Const" : {
+                                                                              "Iv" : 0
+                                                                           }
+                                                                        },
+                                                                        "flags" : 2,
+                                                                        "id" : 59,
+                                                                        "name" : "const",
+                                                                        "next" : 60,
+                                                                        "op_type" : 5,
+                                                                        "private" : 0,
+                                                                        "targ" : 31
+                                                                     },
+                                                                     {
+                                                                        "class" : "SVOP",
+                                                                        "detail" : {
+                                                                           "Const" : {
+                                                                              "Iv" : 1
+                                                                           }
+                                                                        },
+                                                                        "flags" : 2,
+                                                                        "id" : 60,
+                                                                        "name" : "const",
+                                                                        "next" : 54,
+                                                                        "op_type" : 5,
+                                                                        "private" : 0,
+                                                                        "targ" : 35
+                                                                     }
+                                                                  ],
+                                                                  "name" : "substr",
+                                                                  "next" : 61,
+                                                                  "op_type" : 122,
+                                                                  "private" : 3,
+                                                                  "targ" : 10
+                                                               },
+                                                               {
+                                                                  "class" : "SVOP",
+                                                                  "detail" : {
+                                                                     "Const" : {
+                                                                        "Pv" : "-"
+                                                                     }
+                                                                  },
+                                                                  "flags" : 2,
+                                                                  "id" : 61,
+                                                                  "name" : "const",
+                                                                  "next" : 53,
+                                                                  "op_type" : 5,
+                                                                  "private" : 0,
+                                                                  "targ" : 36
+                                                               }
+                                                            ],
+                                                            "name" : "seq",
+                                                            "next" : 46,
+                                                            "op_type" : 90,
+                                                            "private" : 2,
+                                                            "targ" : 0
+                                                         }
+                                                      ],
+                                                      "name" : "and",
+                                                      "next" : 63,
+                                                      "op_type" : 183,
+                                                      "other" : 57,
+                                                      "private" : 1,
+                                                      "targ" : 0
+                                                   }
+                                                ],
+                                                "name" : "null",
+                                                "next" : 46,
+                                                "op_type" : 0,
+                                                "private" : 1,
+                                                "targ" : 0
+                                             },
+                                             {
+                                                "class" : "LISTOP",
+                                                "flags" : 4,
+                                                "id" : 62,
+                                                "kids" : [
+                                                   {
+                                                      "class" : "OP",
+                                                      "flags" : 2,
+                                                      "id" : 63,
+                                                      "name" : "pushmark",
+                                                      "next" : 66,
+                                                      "op_type" : 3,
+                                                      "private" : 0,
+                                                      "targ" : 0
+                                                   },
+                                                   {
+                                                      "class" : "UNOP",
+                                                      "flags" : 6,
+                                                      "id" : 64,
+                                                      "kids" : [
+                                                         {
+                                                            "class" : "UNOP",
+                                                            "flags" : 55,
+                                                            "id" : 65,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "OP",
+                                                                  "flags" : 51,
+                                                                  "id" : 66,
+                                                                  "name" : "padav",
+                                                                  "next" : 64,
+                                                                  "op_type" : 11,
+                                                                  "private" : 0,
+                                                                  "targ" : 2
+                                                               }
+                                                            ],
+                                                            "name" : "null",
+                                                            "next" : 64,
+                                                            "op_type" : 0,
+                                                            "private" : 0,
+                                                            "targ" : 161,
+                                                            "was" : "list"
+                                                         }
+                                                      ],
+                                                      "name" : "srefgen",
+                                                      "next" : 62,
+                                                      "op_type" : 21,
+                                                      "private" : 1,
+                                                      "targ" : 0
+                                                   }
+                                                ],
+                                                "name" : "return",
+                                                "next" : 42,
+                                                "op_type" : 212,
+                                                "private" : 0,
+                                                "targ" : 0
+                                             }
+                                          ],
+                                          "name" : "or",
+                                          "next" : 42,
+                                          "op_type" : 184,
+                                          "other" : 63,
+                                          "private" : 1,
+                                          "targ" : 0
+                                       }
+                                    ],
+                                    "name" : "null",
+                                    "next" : 42,
+                                    "op_type" : 0,
+                                    "private" : 1,
+                                    "targ" : 0
+                                 }
+                              ],
+                              "name" : "leave",
+                              "next" : 67,
+                              "op_type" : 206,
+                              "private" : 0,
+                              "targ" : 0
+                           }
+                        ],
+                        "name" : "cond_expr",
+                        "next" : 43,
+                        "op_type" : 187,
+                        "other" : 32,
+                        "private" : 1,
+                        "targ" : 0
+                     }
+                  ],
+                  "name" : "null",
+                  "next" : 67,
+                  "op_type" : 0,
+                  "private" : 1,
+                  "targ" : 0
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 9
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 67,
+                  "name" : "nextstate",
+                  "next" : 69,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "LISTOP",
+                  "flags" : 13,
+                  "id" : 68,
+                  "kids" : [
+                     {
+                        "class" : "OP",
+                        "flags" : 33,
+                        "id" : 69,
+                        "name" : "padrange",
+                        "next" : 72,
+                        "op_type" : 398,
+                        "private" : 130,
+                        "targ" : 11
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 33,
+                        "id" : 70,
+                        "name" : "padsv",
+                        "next" : 71,
+                        "op_type" : 9,
+                        "private" : 128,
+                        "targ" : 11
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 33,
+                        "id" : 71,
+                        "name" : "padhv",
+                        "next" : 68,
+                        "op_type" : 12,
+                        "private" : 128,
+                        "targ" : 12
+                     }
+                  ],
+                  "name" : "list",
+                  "next" : 72,
+                  "op_type" : 161,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 10
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 72,
+                  "name" : "nextstate",
+                  "next" : 74,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "UNOP",
+                  "flags" : 69,
+                  "id" : 73,
+                  "kids" : [
+                     {
+                        "class" : "SVOP",
+                        "detail" : {
+                           "Const" : {
+                              "Iv" : 0
+                           }
+                        },
+                        "flags" : 2,
+                        "id" : 74,
+                        "name" : "const",
+                        "next" : 73,
+                        "op_type" : 5,
+                        "private" : 0,
+                        "targ" : 37
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 178,
+                        "id" : 75,
+                        "name" : "null",
+                        "next" : 73,
+                        "op_type" : 0,
+                        "private" : 0,
+                        "targ" : 9,
+                        "was" : "padsv"
+                     }
+                  ],
+                  "name" : "padsv_store",
+                  "next" : 76,
+                  "op_type" : 10,
+                  "private" : 0,
+                  "targ" : 11
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 11
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 76,
+                  "name" : "nextstate",
+                  "next" : 81,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "BINOP",
+                  "flags" : 13,
+                  "id" : 77,
+                  "kids" : [
+                     {
+                        "class" : "LOOP",
+                        "detail" : {
+                           "Loop" : {
+                              "last" : 77,
+                              "next" : 124,
+                              "redo" : 89
+                           }
+                        },
+                        "flags" : 69,
+                        "id" : 78,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 2,
+                              "id" : 79,
+                              "name" : "null",
+                              "next" : 81,
+                              "op_type" : 0,
+                              "private" : 0,
+                              "targ" : 3,
+                              "was" : "pushmark"
+                           },
+                           {
+                              "class" : "UNOP",
+                              "flags" : 39,
+                              "id" : 80,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 34,
+                                    "id" : 81,
+                                    "name" : "pushmark",
+                                    "next" : 83,
+                                    "op_type" : 3,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "UNOP",
+                                    "flags" : 54,
+                                    "id" : 82,
+                                    "kids" : [
+                                       {
+                                          "class" : "OP",
+                                          "flags" : 34,
+                                          "id" : 83,
+                                          "name" : "padsv",
+                                          "next" : 82,
+                                          "op_type" : 9,
+                                          "private" : 16,
+                                          "targ" : 1
+                                       }
+                                    ],
+                                    "name" : "rv2av",
+                                    "next" : 84,
+                                    "op_type" : 137,
+                                    "private" : 3,
+                                    "targ" : 13
+                                 }
+                              ],
+                              "name" : "null",
+                              "next" : 84,
+                              "op_type" : 0,
+                              "private" : 0,
+                              "targ" : 161,
+                              "was" : "list"
+                           },
+                           {
+                              "class" : "PADOP",
+                              "detail" : {
+                                 "Gv" : {
+                                    "name" : "_",
+                                    "stash" : "main"
+                                 }
+                              },
+                              "flags" : 2,
+                              "id" : 84,
+                              "name" : "gv",
+                              "next" : 78,
+                              "op_type" : 7,
+                              "private" : 0,
+                              "targ" : 0
+                           }
+                        ],
+                        "name" : "enteriter",
+                        "next" : 87,
+                        "op_type" : 208,
+                        "private" : 8,
+                        "targ" : 0
+                     },
+                     {
+                        "class" : "UNOP",
+                        "flags" : 5,
+                        "id" : 85,
+                        "kids" : [
+                           {
+                              "class" : "LOGOP",
+                              "flags" : 5,
+                              "id" : 86,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 2,
+                                    "id" : 87,
+                                    "name" : "iter",
+                                    "next" : 86,
+                                    "op_type" : 209,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "LISTOP",
+                                    "flags" : 13,
+                                    "id" : 88,
+                                    "kids" : [
+                                       {
+                                          "class" : "COP",
+                                          "detail" : {
+                                             "Cop" : {
+                                                "file" : "(eval)",
+                                                "line" : 12
+                                             }
+                                          },
+                                          "flags" : 1,
+                                          "id" : 89,
+                                          "name" : "nextstate",
+                                          "next" : 94,
+                                          "op_type" : 202,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       },
+                                       {
+                                          "class" : "BINOP",
+                                          "flags" : 13,
+                                          "id" : 90,
+                                          "kids" : [
+                                             {
+                                                "class" : "LOOP",
+                                                "detail" : {
+                                                   "Loop" : {
+                                                      "last" : 90,
+                                                      "next" : 120,
+                                                      "redo" : 112
+                                                   }
+                                                },
+                                                "flags" : 5,
+                                                "id" : 91,
+                                                "kids" : [
+                                                   {
+                                                      "class" : "OP",
+                                                      "flags" : 2,
+                                                      "id" : 92,
+                                                      "name" : "null",
+                                                      "next" : 94,
+                                                      "op_type" : 0,
+                                                      "private" : 0,
+                                                      "targ" : 3,
+                                                      "was" : "pushmark"
+                                                   },
+                                                   {
+                                                      "class" : "UNOP",
+                                                      "flags" : 39,
+                                                      "id" : 93,
+                                                      "kids" : [
+                                                         {
+                                                            "class" : "OP",
+                                                            "flags" : 34,
+                                                            "id" : 94,
+                                                            "name" : "pushmark",
+                                                            "next" : 100,
+                                                            "op_type" : 3,
+                                                            "private" : 0,
+                                                            "targ" : 0
+                                                         },
+                                                         {
+                                                            "class" : "UNOP",
+                                                            "flags" : 39,
+                                                            "id" : 95,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "LOGOP",
+                                                                  "flags" : 39,
+                                                                  "id" : 96,
+                                                                  "kids" : [
+                                                                     {
+                                                                        "class" : "BINOP",
+                                                                        "flags" : 6,
+                                                                        "id" : 97,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "UNOP",
+                                                                              "flags" : 6,
+                                                                              "id" : 98,
+                                                                              "kids" : [
+                                                                                 {
+                                                                                    "class" : "UNOP",
+                                                                                    "flags" : 6,
+                                                                                    "id" : 99,
+                                                                                    "kids" : [
+                                                                                       {
+                                                                                          "class" : "PADOP",
+                                                                                          "detail" : {
+                                                                                             "Gv" : {
+                                                                                                "name" : "_",
+                                                                                                "stash" : "main"
+                                                                                             }
+                                                                                          },
+                                                                                          "flags" : 2,
+                                                                                          "id" : 100,
+                                                                                          "name" : "gvsv",
+                                                                                          "next" : 98,
+                                                                                          "op_type" : 6,
+                                                                                          "private" : 0,
+                                                                                          "targ" : 0
+                                                                                       }
+                                                                                    ],
+                                                                                    "name" : "null",
+                                                                                    "next" : 98,
+                                                                                    "op_type" : 0,
+                                                                                    "private" : 3,
+                                                                                    "targ" : 15,
+                                                                                    "was" : "rv2sv"
+                                                                                 }
+                                                                              ],
+                                                                              "name" : "ref",
+                                                                              "next" : 101,
+                                                                              "op_type" : 22,
+                                                                              "private" : 1,
+                                                                              "targ" : 15
+                                                                           },
+                                                                           {
+                                                                              "class" : "SVOP",
+                                                                              "detail" : {
+                                                                                 "Const" : {
+                                                                                    "Pv" : "ARRAY"
+                                                                                 }
+                                                                              },
+                                                                              "flags" : 2,
+                                                                              "id" : 101,
+                                                                              "name" : "const",
+                                                                              "next" : 97,
+                                                                              "op_type" : 5,
+                                                                              "private" : 0,
+                                                                              "targ" : 38
+                                                                           }
+                                                                        ],
+                                                                        "name" : "seq",
+                                                                        "next" : 96,
+                                                                        "op_type" : 90,
+                                                                        "private" : 2,
+                                                                        "targ" : 0
+                                                                     },
+                                                                     {
+                                                                        "class" : "UNOP",
+                                                                        "flags" : 39,
+                                                                        "id" : 102,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "UNOP",
+                                                                              "flags" : 38,
+                                                                              "id" : 103,
+                                                                              "kids" : [
+                                                                                 {
+                                                                                    "class" : "PADOP",
+                                                                                    "detail" : {
+                                                                                       "Gv" : {
+                                                                                          "name" : "_",
+                                                                                          "stash" : "main"
+                                                                                       }
+                                                                                    },
+                                                                                    "flags" : 2,
+                                                                                    "id" : 104,
+                                                                                    "name" : "gv",
+                                                                                    "next" : 103,
+                                                                                    "op_type" : 7,
+                                                                                    "private" : 0,
+                                                                                    "targ" : 0
+                                                                                 }
+                                                                              ],
+                                                                              "name" : "rv2sv",
+                                                                              "next" : 102,
+                                                                              "op_type" : 15,
+                                                                              "private" : 19,
+                                                                              "targ" : 0
+                                                                           }
+                                                                        ],
+                                                                        "name" : "rv2av",
+                                                                        "next" : 107,
+                                                                        "op_type" : 137,
+                                                                        "private" : 3,
+                                                                        "targ" : 17
+                                                                     },
+                                                                     {
+                                                                        "class" : "UNOP",
+                                                                        "flags" : 38,
+                                                                        "id" : 105,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "PADOP",
+                                                                              "detail" : {
+                                                                                 "Gv" : {
+                                                                                    "name" : "_",
+                                                                                    "stash" : "main"
+                                                                                 }
+                                                                              },
+                                                                              "flags" : 2,
+                                                                              "id" : 106,
+                                                                              "name" : "gvsv",
+                                                                              "next" : 107,
+                                                                              "op_type" : 6,
+                                                                              "private" : 0,
+                                                                              "targ" : 0
+                                                                           }
+                                                                        ],
+                                                                        "name" : "null",
+                                                                        "next" : 95,
+                                                                        "op_type" : 0,
+                                                                        "private" : 3,
+                                                                        "targ" : 15,
+                                                                        "was" : "rv2sv"
+                                                                     }
+                                                                  ],
+                                                                  "name" : "cond_expr",
+                                                                  "next" : 106,
+                                                                  "op_type" : 187,
+                                                                  "other" : 104,
+                                                                  "private" : 1,
+                                                                  "targ" : 0
+                                                               }
+                                                            ],
+                                                            "name" : "null",
+                                                            "next" : 93,
+                                                            "op_type" : 0,
+                                                            "private" : 1,
+                                                            "targ" : 0
+                                                         }
+                                                      ],
+                                                      "name" : "null",
+                                                      "next" : 107,
+                                                      "op_type" : 0,
+                                                      "private" : 0,
+                                                      "targ" : 161,
+                                                      "was" : "list"
+                                                   },
+                                                   {
+                                                      "class" : "PADOP",
+                                                      "detail" : {
+                                                         "Gv" : {
+                                                            "name" : "_",
+                                                            "stash" : "main"
+                                                         }
+                                                      },
+                                                      "flags" : 2,
+                                                      "id" : 107,
+                                                      "name" : "gv",
+                                                      "next" : 91,
+                                                      "op_type" : 7,
+                                                      "private" : 0,
+                                                      "targ" : 0
+                                                   }
+                                                ],
+                                                "name" : "enteriter",
+                                                "next" : 110,
+                                                "op_type" : 208,
+                                                "private" : 8,
+                                                "targ" : 0
+                                             },
+                                             {
+                                                "class" : "UNOP",
+                                                "flags" : 5,
+                                                "id" : 108,
+                                                "kids" : [
+                                                   {
+                                                      "class" : "LOGOP",
+                                                      "flags" : 5,
+                                                      "id" : 109,
+                                                      "kids" : [
+                                                         {
+                                                            "class" : "OP",
+                                                            "flags" : 2,
+                                                            "id" : 110,
+                                                            "name" : "iter",
+                                                            "next" : 109,
+                                                            "op_type" : 209,
+                                                            "private" : 0,
+                                                            "targ" : 0
+                                                         },
+                                                         {
+                                                            "class" : "LISTOP",
+                                                            "flags" : 5,
+                                                            "id" : 111,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "COP",
+                                                                  "detail" : {
+                                                                     "Cop" : {
+                                                                        "file" : "(eval)",
+                                                                        "line" : 12
+                                                                     }
+                                                                  },
+                                                                  "flags" : 1,
+                                                                  "id" : 112,
+                                                                  "name" : "nextstate",
+                                                                  "next" : 114,
+                                                                  "op_type" : 202,
+                                                                  "private" : 0,
+                                                                  "targ" : 0
+                                                               },
+                                                               {
+                                                                  "class" : "BINOP",
+                                                                  "flags" : 69,
+                                                                  "id" : 113,
+                                                                  "kids" : [
+                                                                     {
+                                                                        "class" : "OP",
+                                                                        "flags" : 2,
+                                                                        "id" : 114,
+                                                                        "name" : "padsv",
+                                                                        "next" : 116,
+                                                                        "op_type" : 9,
+                                                                        "private" : 0,
+                                                                        "targ" : 11
+                                                                     },
+                                                                     {
+                                                                        "class" : "BINOP",
+                                                                        "flags" : 182,
+                                                                        "id" : 115,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "OP",
+                                                                              "flags" : 18,
+                                                                              "id" : 116,
+                                                                              "name" : "padhv",
+                                                                              "next" : 119,
+                                                                              "op_type" : 12,
+                                                                              "private" : 0,
+                                                                              "targ" : 12
+                                                                           },
+                                                                           {
+                                                                              "class" : "UNOP",
+                                                                              "flags" : 6,
+                                                                              "id" : 117,
+                                                                              "kids" : [
+                                                                                 {
+                                                                                    "class" : "UNOP",
+                                                                                    "flags" : 6,
+                                                                                    "id" : 118,
+                                                                                    "kids" : [
+                                                                                       {
+                                                                                          "class" : "PADOP",
+                                                                                          "detail" : {
+                                                                                             "Gv" : {
+                                                                                                "name" : "_",
+                                                                                                "stash" : "main"
+                                                                                             }
+                                                                                          },
+                                                                                          "flags" : 2,
+                                                                                          "id" : 119,
+                                                                                          "name" : "gvsv",
+                                                                                          "next" : 117,
+                                                                                          "op_type" : 6,
+                                                                                          "private" : 0,
+                                                                                          "targ" : 0
+                                                                                       }
+                                                                                    ],
+                                                                                    "name" : "null",
+                                                                                    "next" : 117,
+                                                                                    "op_type" : 0,
+                                                                                    "private" : 3,
+                                                                                    "targ" : 15,
+                                                                                    "was" : "rv2sv"
+                                                                                 }
+                                                                              ],
+                                                                              "name" : "lc",
+                                                                              "next" : 115,
+                                                                              "op_type" : 135,
+                                                                              "private" : 1,
+                                                                              "targ" : 20
+                                                                           }
+                                                                        ],
+                                                                        "name" : "helem",
+                                                                        "next" : 113,
+                                                                        "op_type" : 153,
+                                                                        "private" : 2,
+                                                                        "targ" : 0
+                                                                     }
+                                                                  ],
+                                                                  "name" : "sassign",
+                                                                  "next" : 120,
+                                                                  "op_type" : 37,
+                                                                  "private" : 2,
+                                                                  "targ" : 0
+                                                               },
+                                                               {
+                                                                  "class" : "OP",
+                                                                  "flags" : 1,
+                                                                  "id" : 120,
+                                                                  "name" : "unstack",
+                                                                  "next" : 110,
+                                                                  "op_type" : 204,
+                                                                  "private" : 0,
+                                                                  "targ" : 0
+                                                               }
+                                                            ],
+                                                            "name" : "lineseq",
+                                                            "next" : 108,
+                                                            "op_type" : 201,
+                                                            "private" : 0,
+                                                            "targ" : 0
+                                                         }
+                                                      ],
+                                                      "name" : "and",
+                                                      "next" : 90,
+                                                      "op_type" : 183,
+                                                      "other" : 112,
+                                                      "private" : 1,
+                                                      "targ" : 0
+                                                   }
+                                                ],
+                                                "name" : "null",
+                                                "next" : 90,
+                                                "op_type" : 0,
+                                                "private" : 1,
+                                                "targ" : 0
+                                             }
+                                          ],
+                                          "name" : "leaveloop",
+                                          "next" : 121,
+                                          "op_type" : 211,
+                                          "private" : 2,
+                                          "targ" : 0
+                                       },
+                                       {
+                                          "class" : "COP",
+                                          "detail" : {
+                                             "Cop" : {
+                                                "file" : "(eval)",
+                                                "line" : 13
+                                             }
+                                          },
+                                          "flags" : 1,
+                                          "id" : 121,
+                                          "name" : "nextstate",
+                                          "next" : 123,
+                                          "op_type" : 202,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       },
+                                       {
+                                          "class" : "UNOP",
+                                          "flags" : 5,
+                                          "id" : 122,
+                                          "kids" : [
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 50,
+                                                "id" : 123,
+                                                "name" : "padsv",
+                                                "next" : 122,
+                                                "op_type" : 9,
+                                                "private" : 0,
+                                                "targ" : 11
+                                             }
+                                          ],
+                                          "name" : "preinc",
+                                          "next" : 124,
+                                          "op_type" : 47,
+                                          "private" : 1,
+                                          "targ" : 22
+                                       },
+                                       {
+                                          "class" : "OP",
+                                          "flags" : 1,
+                                          "id" : 124,
+                                          "name" : "unstack",
+                                          "next" : 87,
+                                          "op_type" : 204,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       }
+                                    ],
+                                    "name" : "lineseq",
+                                    "next" : 85,
+                                    "op_type" : 201,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 }
+                              ],
+                              "name" : "and",
+                              "next" : 77,
+                              "op_type" : 183,
+                              "other" : 89,
+                              "private" : 1,
+                              "targ" : 0
+                           }
+                        ],
+                        "name" : "null",
+                        "next" : 77,
+                        "op_type" : 0,
+                        "private" : 1,
+                        "targ" : 0
+                     }
+                  ],
+                  "name" : "leaveloop",
+                  "next" : 125,
+                  "op_type" : 211,
+                  "private" : 2,
+                  "targ" : 0
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 15
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 125,
+                  "name" : "nextstate",
+                  "next" : 128,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "BINOP",
+                  "flags" : 69,
+                  "id" : 126,
+                  "kids" : [
+                     {
+                        "class" : "UNOP",
+                        "flags" : 7,
+                        "id" : 127,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 2,
+                              "id" : 128,
+                              "name" : "pushmark",
+                              "next" : 129,
+                              "op_type" : 3,
+                              "private" : 0,
+                              "targ" : 0
+                           },
+                           {
+                              "class" : "OP",
+                              "flags" : 11,
+                              "id" : 129,
+                              "name" : "padav",
+                              "next" : 131,
+                              "op_type" : 11,
+                              "private" : 0,
+                              "targ" : 2
+                           }
+                        ],
+                        "name" : "null",
+                        "next" : 131,
+                        "op_type" : 0,
+                        "private" : 0,
+                        "targ" : 161,
+                        "was" : "list"
+                     },
+                     {
+                        "class" : "UNOP",
+                        "flags" : 7,
+                        "id" : 130,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 2,
+                              "id" : 131,
+                              "name" : "pushmark",
+                              "next" : 132,
+                              "op_type" : 3,
+                              "private" : 0,
+                              "targ" : 0
+                           },
+                           {
+                              "class" : "OP",
+                              "flags" : 179,
+                              "id" : 132,
+                              "name" : "padhv",
+                              "next" : 126,
+                              "op_type" : 12,
+                              "private" : 128,
+                              "targ" : 24
+                           }
+                        ],
+                        "name" : "null",
+                        "next" : 126,
+                        "op_type" : 0,
+                        "private" : 0,
+                        "targ" : 161,
+                        "was" : "list"
+                     }
+                  ],
+                  "name" : "aassign",
+                  "next" : 133,
+                  "op_type" : 38,
+                  "private" : 16,
+                  "targ" : 25
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 16
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 133,
+                  "name" : "nextstate",
+                  "next" : 135,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "LISTOP",
+                  "flags" : 13,
+                  "id" : 134,
+                  "kids" : [
+                     {
+                        "class" : "OP",
+                        "flags" : 33,
+                        "id" : 135,
+                        "name" : "padrange",
+                        "next" : 138,
+                        "op_type" : 398,
+                        "private" : 130,
+                        "targ" : 26
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 33,
+                        "id" : 136,
+                        "name" : "padav",
+                        "next" : 137,
+                        "op_type" : 11,
+                        "private" : 128,
+                        "targ" : 26
+                     },
+                     {
+                        "class" : "OP",
+                        "flags" : 33,
+                        "id" : 137,
+                        "name" : "padhv",
+                        "next" : 134,
+                        "op_type" : 12,
+                        "private" : 128,
+                        "targ" : 27
+                     }
+                  ],
+                  "name" : "list",
+                  "next" : 138,
+                  "op_type" : 161,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 17
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 138,
+                  "name" : "nextstate",
+                  "next" : 142,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "BINOP",
+                  "flags" : 69,
+                  "id" : 139,
+                  "kids" : [
+                     {
+                        "class" : "UNOP",
+                        "flags" : 6,
+                        "id" : 140,
+                        "kids" : [
+                           {
+                              "class" : "UNOP",
+                              "flags" : 22,
+                              "id" : 141,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 34,
+                                    "id" : 142,
+                                    "name" : "padsv",
+                                    "next" : 141,
+                                    "op_type" : 9,
+                                    "private" : 16,
+                                    "targ" : 1
+                                 }
+                              ],
+                              "name" : "rv2av",
+                              "next" : 140,
+                              "op_type" : 137,
+                              "private" : 3,
+                              "targ" : 28
+                           }
+                        ],
+                        "name" : "av2arylen",
+                        "next" : 144,
+                        "op_type" : 16,
+                        "private" : 1,
+                        "targ" : 0
+                     },
+                     {
+                        "class" : "UNOP",
+                        "flags" : 182,
+                        "id" : 143,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 18,
+                              "id" : 144,
+                              "name" : "padav",
+                              "next" : 143,
+                              "op_type" : 11,
+                              "private" : 0,
+                              "targ" : 26
+                           }
+                        ],
+                        "name" : "av2arylen",
+                        "next" : 139,
+                        "op_type" : 16,
+                        "private" : 1,
+                        "targ" : 0
+                     }
+                  ],
+                  "name" : "sassign",
+                  "next" : 145,
+                  "op_type" : 37,
+                  "private" : 2,
+                  "targ" : 0
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 18
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 145,
+                  "name" : "nextstate",
+                  "next" : 150,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "BINOP",
+                  "flags" : 13,
+                  "id" : 146,
+                  "kids" : [
+                     {
+                        "class" : "LOOP",
+                        "detail" : {
+                           "Loop" : {
+                              "last" : 146,
+                              "next" : 194,
+                              "redo" : 159
+                           }
+                        },
+                        "flags" : 5,
+                        "id" : 147,
+                        "kids" : [
+                           {
+                              "class" : "OP",
+                              "flags" : 2,
+                              "id" : 148,
+                              "name" : "null",
+                              "next" : 150,
+                              "op_type" : 0,
+                              "private" : 0,
+                              "targ" : 3,
+                              "was" : "pushmark"
+                           },
+                           {
+                              "class" : "UNOP",
+                              "flags" : 39,
+                              "id" : 149,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 34,
+                                    "id" : 150,
+                                    "name" : "pushmark",
+                                    "next" : 152,
+                                    "op_type" : 3,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "LISTOP",
+                                    "flags" : 39,
+                                    "id" : 151,
+                                    "kids" : [
+                                       {
+                                          "class" : "OP",
+                                          "flags" : 2,
+                                          "id" : 152,
+                                          "name" : "pushmark",
+                                          "next" : 154,
+                                          "op_type" : 3,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       },
+                                       {
+                                          "class" : "UNOP",
+                                          "flags" : 7,
+                                          "id" : 153,
+                                          "kids" : [
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 51,
+                                                "id" : 154,
+                                                "name" : "padhv",
+                                                "next" : 153,
+                                                "op_type" : 12,
+                                                "private" : 0,
+                                                "targ" : 24
+                                             }
+                                          ],
+                                          "name" : "keys",
+                                          "next" : 151,
+                                          "op_type" : 149,
+                                          "private" : 1,
+                                          "targ" : 33
+                                       }
+                                    ],
+                                    "name" : "sort",
+                                    "next" : 147,
+                                    "op_type" : 171,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 }
+                              ],
+                              "name" : "null",
+                              "next" : 147,
+                              "op_type" : 0,
+                              "private" : 0,
+                              "targ" : 161,
+                              "was" : "list"
+                           }
+                        ],
+                        "name" : "enteriter",
+                        "next" : 157,
+                        "op_type" : 208,
+                        "private" : 128,
+                        "targ" : 29
+                     },
+                     {
+                        "class" : "UNOP",
+                        "flags" : 5,
+                        "id" : 155,
+                        "kids" : [
+                           {
+                              "class" : "LOGOP",
+                              "flags" : 5,
+                              "id" : 156,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 2,
+                                    "id" : 157,
+                                    "name" : "iter",
+                                    "next" : 156,
+                                    "op_type" : 209,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 },
+                                 {
+                                    "class" : "LISTOP",
+                                    "flags" : 13,
+                                    "id" : 158,
+                                    "kids" : [
+                                       {
+                                          "class" : "COP",
+                                          "detail" : {
+                                             "Cop" : {
+                                                "file" : "(eval)",
+                                                "line" : 19
+                                             }
+                                          },
+                                          "flags" : 1,
+                                          "id" : 159,
+                                          "name" : "nextstate",
+                                          "next" : 162,
+                                          "op_type" : 202,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       },
+                                       {
+                                          "class" : "UNOP",
+                                          "flags" : 69,
+                                          "id" : 160,
+                                          "kids" : [
+                                             {
+                                                "class" : "UNOP",
+                                                "flags" : 6,
+                                                "id" : 161,
+                                                "kids" : [
+                                                   {
+                                                      "class" : "OP",
+                                                      "flags" : 2,
+                                                      "id" : 162,
+                                                      "name" : "padsv",
+                                                      "next" : 161,
+                                                      "op_type" : 9,
+                                                      "private" : 0,
+                                                      "targ" : 29
+                                                   }
+                                                ],
+                                                "name" : "lc",
+                                                "next" : 160,
+                                                "op_type" : 135,
+                                                "private" : 1,
+                                                "targ" : 32
+                                             },
+                                             {
+                                                "class" : "OP",
+                                                "flags" : 178,
+                                                "id" : 163,
+                                                "name" : "null",
+                                                "next" : 160,
+                                                "op_type" : 0,
+                                                "private" : 128,
+                                                "targ" : 9,
+                                                "was" : "padsv"
+                                             }
+                                          ],
+                                          "name" : "padsv_store",
+                                          "next" : 164,
+                                          "op_type" : 10,
+                                          "private" : 128,
+                                          "targ" : 34
+                                       },
+                                       {
+                                          "class" : "COP",
+                                          "detail" : {
+                                             "Cop" : {
+                                                "file" : "(eval)",
+                                                "line" : 20
+                                             }
+                                          },
+                                          "flags" : 1,
+                                          "id" : 164,
+                                          "name" : "nextstate",
+                                          "next" : 166,
+                                          "op_type" : 202,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       },
+                                       {
+                                          "class" : "PMOP",
+                                          "detail" : {
+                                             "Pm" : {
+                                                "pattern" : "^\\-"
+                                             }
+                                          },
+                                          "flags" : 5,
+                                          "id" : 165,
+                                          "kids" : [
+                                             {
+                                                "class" : "SVOP",
+                                                "detail" : {
+                                                   "Const" : {
+                                                      "Pv" : ""
+                                                   }
+                                                },
+                                                "flags" : 2,
+                                                "id" : 166,
+                                                "name" : "const",
+                                                "next" : 165,
+                                                "op_type" : 5,
+                                                "private" : 0,
+                                                "targ" : 39
+                                             }
+                                          ],
+                                          "name" : "subst",
+                                          "next" : 167,
+                                          "op_type" : 33,
+                                          "private" : 0,
+                                          "targ" : 34
+                                       },
+                                       {
+                                          "class" : "COP",
+                                          "detail" : {
+                                             "Cop" : {
+                                                "file" : "(eval)",
+                                                "line" : 21
+                                             }
+                                          },
+                                          "flags" : 1,
+                                          "id" : 167,
+                                          "name" : "nextstate",
+                                          "next" : 171,
+                                          "op_type" : 202,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       },
+                                       {
+                                          "class" : "UNOP",
+                                          "flags" : 5,
+                                          "id" : 168,
+                                          "kids" : [
+                                             {
+                                                "class" : "LOGOP",
+                                                "flags" : 5,
+                                                "id" : 169,
+                                                "kids" : [
+                                                   {
+                                                      "class" : "UNOP",
+                                                      "flags" : 6,
+                                                      "id" : 170,
+                                                      "kids" : [
+                                                         {
+                                                            "class" : "UNOP_AUX",
+                                                            "detail" : {
+                                                               "MultiDeref" : {
+                                                                  "steps" : [
+                                                                     {
+                                                                        "base" : "padhv",
+                                                                        "base_targ" : 12,
+                                                                        "container" : "hash",
+                                                                        "key" : "$key",
+                                                                        "key_targ" : 34
+                                                                     }
+                                                                  ]
+                                                               }
+                                                            },
+                                                            "flags" : 6,
+                                                            "id" : 171,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "OP",
+                                                                  "flags" : 18,
+                                                                  "id" : 172,
+                                                                  "name" : "null",
+                                                                  "next" : 171,
+                                                                  "op_type" : 0,
+                                                                  "private" : 0,
+                                                                  "targ" : 12,
+                                                                  "was" : "padhv"
+                                                               }
+                                                            ],
+                                                            "name" : "multideref",
+                                                            "next" : 169,
+                                                            "op_type" : 156,
+                                                            "private" : 16,
+                                                            "targ" : 0
+                                                         }
+                                                      ],
+                                                      "name" : "null",
+                                                      "next" : 169,
+                                                      "op_type" : 0,
+                                                      "private" : 1,
+                                                      "targ" : 151,
+                                                      "was" : "exists"
+                                                   },
+                                                   {
+                                                      "class" : "LISTOP",
+                                                      "flags" : 5,
+                                                      "id" : 173,
+                                                      "kids" : [
+                                                         {
+                                                            "class" : "COP",
+                                                            "detail" : {
+                                                               "Cop" : {
+                                                                  "file" : "(eval)",
+                                                                  "line" : 22
+                                                               }
+                                                            },
+                                                            "flags" : 1,
+                                                            "id" : 174,
+                                                            "name" : "null",
+                                                            "next" : 178,
+                                                            "op_type" : 0,
+                                                            "private" : 0,
+                                                            "targ" : 202,
+                                                            "was" : "nextstate"
+                                                         },
+                                                         {
+                                                            "class" : "BINOP",
+                                                            "flags" : 69,
+                                                            "id" : 175,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "UNOP",
+                                                                  "flags" : 6,
+                                                                  "id" : 176,
+                                                                  "kids" : [
+                                                                     {
+                                                                        "class" : "UNOP_AUX",
+                                                                        "detail" : {
+                                                                           "MultiDeref" : {
+                                                                              "steps" : [
+                                                                                 {
+                                                                                    "base" : "padhv",
+                                                                                    "base_targ" : 24,
+                                                                                    "container" : "hash",
+                                                                                    "key" : "$k",
+                                                                                    "key_targ" : 29
+                                                                                 }
+                                                                              ]
+                                                                           }
+                                                                        },
+                                                                        "flags" : 6,
+                                                                        "id" : 177,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "OP",
+                                                                              "flags" : 18,
+                                                                              "id" : 178,
+                                                                              "name" : "null",
+                                                                              "next" : 177,
+                                                                              "op_type" : 0,
+                                                                              "private" : 0,
+                                                                              "targ" : 12,
+                                                                              "was" : "padhv"
+                                                                           }
+                                                                        ],
+                                                                        "name" : "multideref",
+                                                                        "next" : 180,
+                                                                        "op_type" : 156,
+                                                                        "private" : 0,
+                                                                        "targ" : 0
+                                                                     }
+                                                                  ],
+                                                                  "name" : "null",
+                                                                  "next" : 180,
+                                                                  "op_type" : 0,
+                                                                  "private" : 2,
+                                                                  "targ" : 153,
+                                                                  "was" : "helem"
+                                                               },
+                                                               {
+                                                                  "class" : "BINOP",
+                                                                  "flags" : 182,
+                                                                  "id" : 179,
+                                                                  "kids" : [
+                                                                     {
+                                                                        "class" : "OP",
+                                                                        "flags" : 18,
+                                                                        "id" : 180,
+                                                                        "name" : "padav",
+                                                                        "next" : 182,
+                                                                        "op_type" : 11,
+                                                                        "private" : 0,
+                                                                        "targ" : 26
+                                                                     },
+                                                                     {
+                                                                        "class" : "UNOP",
+                                                                        "flags" : 6,
+                                                                        "id" : 181,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "UNOP_AUX",
+                                                                              "detail" : {
+                                                                                 "MultiDeref" : {
+                                                                                    "steps" : [
+                                                                                       {
+                                                                                          "base" : "padhv",
+                                                                                          "base_targ" : 12,
+                                                                                          "container" : "hash",
+                                                                                          "key" : "$key",
+                                                                                          "key_targ" : 34
+                                                                                       }
+                                                                                    ]
+                                                                                 }
+                                                                              },
+                                                                              "flags" : 6,
+                                                                              "id" : 182,
+                                                                              "kids" : [
+                                                                                 {
+                                                                                    "class" : "OP",
+                                                                                    "flags" : 18,
+                                                                                    "id" : 183,
+                                                                                    "name" : "null",
+                                                                                    "next" : 182,
+                                                                                    "op_type" : 0,
+                                                                                    "private" : 0,
+                                                                                    "targ" : 12,
+                                                                                    "was" : "padhv"
+                                                                                 }
+                                                                              ],
+                                                                              "name" : "multideref",
+                                                                              "next" : 179,
+                                                                              "op_type" : 156,
+                                                                              "private" : 0,
+                                                                              "targ" : 0
+                                                                           }
+                                                                        ],
+                                                                        "name" : "null",
+                                                                        "next" : 179,
+                                                                        "op_type" : 0,
+                                                                        "private" : 2,
+                                                                        "targ" : 153,
+                                                                        "was" : "helem"
+                                                                     }
+                                                                  ],
+                                                                  "name" : "aelem",
+                                                                  "next" : 175,
+                                                                  "op_type" : 141,
+                                                                  "private" : 2,
+                                                                  "targ" : 0
+                                                               }
+                                                            ],
+                                                            "name" : "sassign",
+                                                            "next" : 194,
+                                                            "op_type" : 37,
+                                                            "private" : 2,
+                                                            "targ" : 0
+                                                         }
+                                                      ],
+                                                      "name" : "scope",
+                                                      "next" : 168,
+                                                      "op_type" : 207,
+                                                      "private" : 0,
+                                                      "targ" : 0
+                                                   },
+                                                   {
+                                                      "class" : "LISTOP",
+                                                      "flags" : 13,
+                                                      "id" : 184,
+                                                      "kids" : [
+                                                         {
+                                                            "class" : "OP",
+                                                            "flags" : 1,
+                                                            "id" : 185,
+                                                            "name" : "enter",
+                                                            "next" : 186,
+                                                            "op_type" : 205,
+                                                            "private" : 0,
+                                                            "targ" : 0
+                                                         },
+                                                         {
+                                                            "class" : "COP",
+                                                            "detail" : {
+                                                               "Cop" : {
+                                                                  "file" : "(eval)",
+                                                                  "line" : 24
+                                                               }
+                                                            },
+                                                            "flags" : 1,
+                                                            "id" : 186,
+                                                            "name" : "nextstate",
+                                                            "next" : 189,
+                                                            "op_type" : 202,
+                                                            "private" : 0,
+                                                            "targ" : 0
+                                                         },
+                                                         {
+                                                            "class" : "BINOP",
+                                                            "flags" : 69,
+                                                            "id" : 187,
+                                                            "kids" : [
+                                                               {
+                                                                  "class" : "UNOP",
+                                                                  "flags" : 6,
+                                                                  "id" : 188,
+                                                                  "kids" : [
+                                                                     {
+                                                                        "class" : "UNOP_AUX",
+                                                                        "detail" : {
+                                                                           "MultiDeref" : {
+                                                                              "steps" : [
+                                                                                 {
+                                                                                    "base" : "padhv",
+                                                                                    "base_targ" : 24,
+                                                                                    "container" : "hash",
+                                                                                    "key" : "$k",
+                                                                                    "key_targ" : 29
+                                                                                 }
+                                                                              ]
+                                                                           }
+                                                                        },
+                                                                        "flags" : 6,
+                                                                        "id" : 189,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "OP",
+                                                                              "flags" : 18,
+                                                                              "id" : 190,
+                                                                              "name" : "null",
+                                                                              "next" : 189,
+                                                                              "op_type" : 0,
+                                                                              "private" : 0,
+                                                                              "targ" : 12,
+                                                                              "was" : "padhv"
+                                                                           }
+                                                                        ],
+                                                                        "name" : "multideref",
+                                                                        "next" : 192,
+                                                                        "op_type" : 156,
+                                                                        "private" : 0,
+                                                                        "targ" : 0
+                                                                     }
+                                                                  ],
+                                                                  "name" : "null",
+                                                                  "next" : 193,
+                                                                  "op_type" : 0,
+                                                                  "private" : 2,
+                                                                  "targ" : 153,
+                                                                  "was" : "helem"
+                                                               },
+                                                               {
+                                                                  "class" : "UNOP",
+                                                                  "flags" : 182,
+                                                                  "id" : 191,
+                                                                  "kids" : [
+                                                                     {
+                                                                        "class" : "UNOP_AUX",
+                                                                        "detail" : {
+                                                                           "MultiDeref" : {
+                                                                              "steps" : [
+                                                                                 {
+                                                                                    "base" : "padhv",
+                                                                                    "base_targ" : 27,
+                                                                                    "container" : "hash",
+                                                                                    "key" : "$key",
+                                                                                    "key_targ" : 34
+                                                                                 }
+                                                                              ]
+                                                                           }
+                                                                        },
+                                                                        "flags" : 166,
+                                                                        "id" : 192,
+                                                                        "kids" : [
+                                                                           {
+                                                                              "class" : "OP",
+                                                                              "flags" : 18,
+                                                                              "id" : 193,
+                                                                              "name" : "null",
+                                                                              "next" : 192,
+                                                                              "op_type" : 0,
+                                                                              "private" : 0,
+                                                                              "targ" : 12,
+                                                                              "was" : "padhv"
+                                                                           }
+                                                                        ],
+                                                                        "name" : "multideref",
+                                                                        "next" : 187,
+                                                                        "op_type" : 156,
+                                                                        "private" : 0,
+                                                                        "targ" : 0
+                                                                     }
+                                                                  ],
+                                                                  "name" : "null",
+                                                                  "next" : 187,
+                                                                  "op_type" : 0,
+                                                                  "private" : 2,
+                                                                  "targ" : 153,
+                                                                  "was" : "helem"
+                                                               }
+                                                            ],
+                                                            "name" : "sassign",
+                                                            "next" : 184,
+                                                            "op_type" : 37,
+                                                            "private" : 2,
+                                                            "targ" : 0
+                                                         }
+                                                      ],
+                                                      "name" : "leave",
+                                                      "next" : 194,
+                                                      "op_type" : 206,
+                                                      "private" : 0,
+                                                      "targ" : 0
+                                                   }
+                                                ],
+                                                "name" : "cond_expr",
+                                                "next" : 185,
+                                                "op_type" : 187,
+                                                "other" : 177,
+                                                "private" : 1,
+                                                "targ" : 0
+                                             }
+                                          ],
+                                          "name" : "null",
+                                          "next" : 194,
+                                          "op_type" : 0,
+                                          "private" : 1,
+                                          "targ" : 0
+                                       },
+                                       {
+                                          "class" : "OP",
+                                          "flags" : 1,
+                                          "id" : 194,
+                                          "name" : "unstack",
+                                          "next" : 157,
+                                          "op_type" : 204,
+                                          "private" : 0,
+                                          "targ" : 0
+                                       }
+                                    ],
+                                    "name" : "lineseq",
+                                    "next" : 155,
+                                    "op_type" : 201,
+                                    "private" : 0,
+                                    "targ" : 0
+                                 }
+                              ],
+                              "name" : "and",
+                              "next" : 146,
+                              "op_type" : 183,
+                              "other" : 159,
+                              "private" : 1,
+                              "targ" : 0
+                           }
+                        ],
+                        "name" : "null",
+                        "next" : 146,
+                        "op_type" : 0,
+                        "private" : 1,
+                        "targ" : 0
+                     }
+                  ],
+                  "name" : "leaveloop",
+                  "next" : 195,
+                  "op_type" : 211,
+                  "private" : 2,
+                  "targ" : 0
+               },
+               {
+                  "class" : "COP",
+                  "detail" : {
+                     "Cop" : {
+                        "file" : "(eval)",
+                        "line" : 27
+                     }
+                  },
+                  "flags" : 1,
+                  "id" : 195,
+                  "name" : "nextstate",
+                  "next" : 200,
+                  "op_type" : 202,
+                  "private" : 0,
+                  "targ" : 0
+               },
+               {
+                  "class" : "LISTOP",
+                  "flags" : 4,
+                  "id" : 196,
+                  "kids" : [
+                     {
+                        "class" : "OP",
+                        "flags" : 2,
+                        "id" : 197,
+                        "name" : "pushmark",
+                        "next" : 200,
+                        "op_type" : 3,
+                        "private" : 0,
+                        "targ" : 0
+                     },
+                     {
+                        "class" : "UNOP",
+                        "flags" : 6,
+                        "id" : 198,
+                        "kids" : [
+                           {
+                              "class" : "UNOP",
+                              "flags" : 55,
+                              "id" : 199,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 51,
+                                    "id" : 200,
+                                    "name" : "padav",
+                                    "next" : 198,
+                                    "op_type" : 11,
+                                    "private" : 0,
+                                    "targ" : 26
+                                 }
+                              ],
+                              "name" : "null",
+                              "next" : 198,
+                              "op_type" : 0,
+                              "private" : 0,
+                              "targ" : 161,
+                              "was" : "list"
+                           }
+                        ],
+                        "name" : "srefgen",
+                        "next" : 203,
+                        "op_type" : 21,
+                        "private" : 1,
+                        "targ" : 0
+                     },
+                     {
+                        "class" : "UNOP",
+                        "flags" : 6,
+                        "id" : 201,
+                        "kids" : [
+                           {
+                              "class" : "UNOP",
+                              "flags" : 55,
+                              "id" : 202,
+                              "kids" : [
+                                 {
+                                    "class" : "OP",
+                                    "flags" : 51,
+                                    "id" : 203,
+                                    "name" : "padhv",
+                                    "next" : 201,
+                                    "op_type" : 12,
+                                    "private" : 0,
+                                    "targ" : 27
+                                 }
+                              ],
+                              "name" : "null",
+                              "next" : 201,
+                              "op_type" : 0,
+                              "private" : 0,
+                              "targ" : 161,
+                              "was" : "list"
+                           }
+                        ],
+                        "name" : "srefgen",
+                        "next" : 0,
+                        "op_type" : 21,
+                        "private" : 1,
+                        "targ" : 0
+                     }
+                  ],
+                  "name" : "return",
+                  "next" : 1,
+                  "op_type" : 212,
+                  "private" : 0,
+                  "targ" : 0
+               }
+            ],
+            "name" : "lineseq",
+            "next" : 0,
+            "op_type" : 201,
+            "private" : 0,
+            "targ" : 0
+         }
+      ],
+      "name" : "leavesub",
+      "op_type" : 192,
+      "private" : 65,
+      "targ" : 1
+   },
+   "start_id" : 2
+}

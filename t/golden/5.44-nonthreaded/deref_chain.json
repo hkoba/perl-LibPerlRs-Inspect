@@ -252,7 +252,8 @@
                                        {
                                           "base" : "chain",
                                           "container" : "array",
-                                          "key" : "$i"
+                                          "key" : "$i",
+                                          "key_targ" : 2
                                        }
                                     ]
                                  }

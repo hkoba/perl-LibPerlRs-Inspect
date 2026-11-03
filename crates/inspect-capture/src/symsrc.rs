@@ -5,8 +5,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use inspect_core::ir::SubIr;
-use inspect_core::passes::symexec::{IrSource, Sym};
+use inspect_core::ir::{SubIr, SvLit};
+use inspect_core::passes::symexec::{HashSeg, IrSource, Sym};
 use libperl_rs::Perl;
 
 use crate::packages::cv_home;
@@ -90,7 +90,53 @@ impl IrSource for PerlSource<'_> {
         home_name(self.perl, &qualify(callee, caller_pkg))
     }
 
-    fn outer_value(&self, _callee: &str, _pad_ix: u32) -> Option<Sym> {
-        None
+    fn outer_value(&self, callee: &str, pad_ix: u32) -> Option<Sym> {
+        let ir = self.sub_ir(callee, "main")?;
+        let sigil = ir
+            .pad
+            .iter()
+            .find(|e| e.ix == pad_ix)?
+            .name
+            .as_deref()?
+            .chars()
+            .next()?;
+        let cv = find_cv(self.perl, callee)?;
+        let sv = crate::raw::PAD_BASE_SV(cv.padlist(), pad_ix as isize);
+        if sv.is_null() {
+            return None;
+        }
+        match sigil {
+            '$' => scalar_sym(sv),
+            '@' => {
+                let av = unsafe { libperl_rs::Av::from_raw_unchecked(sv as *mut libperl_sys::AV) };
+                let items: Option<Vec<Sym>> = av
+                    .iter(self.perl)
+                    .map(|e| e.map_or(Some(Sym::undef()), |e| scalar_sym(e.as_ptr())))
+                    .collect();
+                Some(Sym::List {
+                    items: items?,
+                    tail: None,
+                })
+            }
+            '%' => {
+                let hv = unsafe { libperl_rs::Hv::from_raw_unchecked(sv as *mut libperl_sys::HV) };
+                let pairs: Option<Vec<(String, Sym)>> = hv
+                    .iter(self.perl)
+                    .map(|(k, v)| Some((String::from_utf8_lossy(k).into_owned(), scalar_sym(v.as_ptr())?)))
+                    .collect();
+                Some(Sym::Hash {
+                    segs: vec![HashSeg::Pairs(pairs?)],
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A plain scalar as a constant (references and globs are not followed).
+fn scalar_sym(sv: *const libperl_sys::SV) -> Option<Sym> {
+    match crate::capture::sv_lit(sv) {
+        SvLit::RefTo(_) | SvLit::Code | SvLit::Other(_) | SvLit::Glob { .. } => None,
+        lit => Some(Sym::Const(lit)),
     }
 }

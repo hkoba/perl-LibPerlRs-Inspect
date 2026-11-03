@@ -210,9 +210,14 @@ pub enum OpDetail {
         next: Option<u32>,
         last: Option<u32>,
     },
-    /// PMOP. Retrieving the pattern is an M5 stretch goal
+    /// PMOP (`m//`, `s///`, `qr//`, `split`). `pattern` is the source of
+    /// a pattern fixed at compile time (None for a runtime pattern, which
+    /// has a `regcomp` kid).
     Pm {
         pattern: Option<String>,
+        /// Modifiers of the op (`msixxnpg` subset), None when there are none.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        flags: Option<String>,
     },
     /// Decoded multideref (UNOP_AUX): the deref chain of e.g. `$x->[0]{k}`
     MultiDeref {
@@ -254,6 +259,9 @@ pub struct DerefStep {
     /// Index/key (the value for const, the variable name for padsv, $name for gvsv; None if dynamic)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub key: Option<String>,
+    /// Pad index of a lexical index/key (the padsv case of `key`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub key_targ: Option<u64>,
 }
 
 impl OpDetail {
