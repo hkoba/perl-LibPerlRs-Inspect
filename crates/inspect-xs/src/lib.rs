@@ -98,6 +98,19 @@ fn analyze_logic_range_opts_json(
     serde_json::to_string(&r).map_err(|e| e.to_string())
 }
 
+/// `LibPerlRs::Inspect::check_call_json($spec_json, $call_json, $callee_is_method)`
+/// — findings (JSON array) for a call site (an element of
+/// `analyze(...)->{calls}`) against an argument spec (`analyze(...)->{args}`)
+/// (`inspect_core::passes::check::check_call`).
+#[xs_sub]
+fn check_call_json(spec_json: &str, call_json: &str, callee_is_method: IV) -> Result<String, String> {
+    use inspect_core::passes::{argspec::ArgSpec, callsites::CallSite, check::check_call};
+    let spec: ArgSpec = serde_json::from_str(spec_json).map_err(|e| format!("spec: {e}"))?;
+    let call: CallSite = serde_json::from_str(call_json).map_err(|e| format!("call: {e}"))?;
+    let findings = check_call(&spec, &call, callee_is_method != 0);
+    serde_json::to_string(&findings).map_err(|e| e.to_string())
+}
+
 /// `LibPerlRs::Inspect::analyze($coderef)` — analysis report as a native
 /// nested hashref (no JSON round-trip on the Perl side).
 #[xs_sub]
@@ -309,6 +322,7 @@ xs_boot! {
         dump_optree,
         analyze_json,
         analyze,
+        check_call_json,
         analyze_logic_range_json,
         analyze_logic_range_opts_json,
         analyze_logic_opts_json,

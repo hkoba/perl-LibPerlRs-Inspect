@@ -8,6 +8,8 @@
 //! ([`node_lines`], [`line_index`]).
 
 pub mod argspec;
+pub mod callsites;
+pub mod check;
 pub mod deps;
 pub mod lints;
 pub mod logic;
@@ -24,6 +26,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::ir::{OpClass, OpDetail, OpNode, SubIr};
 
+/// Deserialize a bool that may also come as a number (perl hashes from
+/// `LibPerlRs::Inspect::analyze` carry booleans as 1 / 0).
+pub(crate) fn bool_or_int<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum B {
+        Bool(bool),
+        Int(i64),
+        Str(String),
+    }
+    Ok(match B::deserialize(d)? {
+        B::Bool(b) => b,
+        B::Int(i) => i != 0,
+        B::Str(s) => !(s.is_empty() || s == "0"),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnalysisReport {
     pub args: argspec::ArgSpec,
@@ -31,6 +50,9 @@ pub struct AnalysisReport {
     pub logic: logic::LogicSpec,
     pub types: types::TypesSpec,
     pub lints: lints::LintsSpec,
+    /// Call sites of the body.
+    #[serde(default)]
+    pub calls: Vec<callsites::CallSite>,
 }
 
 pub fn analyze(ir: &SubIr) -> AnalysisReport {
@@ -40,6 +62,7 @@ pub fn analyze(ir: &SubIr) -> AnalysisReport {
         logic: logic::analyze_logic(ir),
         types: types::analyze_types(ir),
         lints: lints::analyze_lints(ir),
+        calls: callsites::call_sites(ir),
     }
 }
 

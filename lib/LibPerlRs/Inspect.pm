@@ -73,6 +73,17 @@ sub analyze_logic_range_opts {
     $_json->decode(analyze_logic_range_opts_json($code, $start, $end, _logic_opt_args($opts)));
 }
 
+# Findings for a call site (an element of analyze($caller)->{calls})
+# against the argument spec of its callee (analyze($callee)->{args}):
+# a list of {kind => too_few|too_many|unknown_key|missing_key|note,
+# message => ...}. $callee_is_method: the call passes an invocant that is
+# not among its args (implied for a method call).
+sub check_call {
+    my ($spec, $call, $callee_is_method) = @_;
+    my $enc = JSON::PP->new->canonical;
+    $_json->decode(check_call_json($enc->encode($spec), $enc->encode($call), $callee_is_method ? 1 : 0));
+}
+
 # analyze() returns a native hashref directly from the XS side (no JSON round trip).
 # Use analyze_json() if you want the JSON string.
 

@@ -66,7 +66,7 @@ pub struct Param {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub line: Option<u32>,
     /// The argument is taken only on some paths.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::bool_or_int")]
     pub conditional: bool,
     /// Declared class (`my Foo $x`).
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -101,7 +101,7 @@ pub struct NamedKey {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub default: Option<String>,
     /// Read on every path without a default or an `exists` test.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::bool_or_int")]
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub line: Option<u32>,
@@ -132,6 +132,7 @@ pub struct HelperUse {
     pub callee: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub line: Option<u32>,
+    #[serde(deserialize_with = "super::bool_or_int")]
     pub inlined: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub note: Option<String>,
@@ -148,6 +149,7 @@ pub struct ArityCheck {
     pub cmp: String,
     pub n: Option<u64>,
     /// The other path dies (otherwise it returns early).
+    #[serde(deserialize_with = "super::bool_or_int")]
     pub enforced: bool,
 }
 
