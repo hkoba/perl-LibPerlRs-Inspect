@@ -124,6 +124,7 @@ mod tests {
             pairs_from: 0,
             forwards_args: false,
             kind: kind.into(),
+            line_seq: 0,
         }
     }
 

@@ -1,5 +1,16 @@
 //! Call sites of a sub: every `entersub` (and `goto &sub`) with its callee,
 //! its arguments as written and what is known about their count.
+//!
+//! [`call_sites`] lists the calls in pre-order of the op tree (`node` ids
+//! increase in that order). Perl keeps line numbers per statement, so
+//! `line` is the line of the statement a call belongs to (the first line
+//! of a statement written over several lines). To tell apart calls on one
+//! line, [`CallSite::line_seq`] numbers them in source order of their
+//! callee names, which pre-order does not always follow: a method chain
+//! `$x->a->b` is `b(a($x))` in the tree, and an assignment evaluates its
+//! right-hand side first.
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +41,14 @@ pub struct CallSite {
     pub forwards_args: bool,
     /// call | amper | goto | method
     pub kind: String,
+    /// Position of the call among the calls with the same `line`, in the
+    /// source order of their callee names (0-based). Best effort, from
+    /// the shape of the op tree: a method's invocant precedes it and the
+    /// left-hand side of an assignment precedes the right-hand side;
+    /// otherwise operands are in tree order, so `f() if g()` (the same
+    /// tree as `g() && f()`) numbers `g` first.
+    #[serde(default)]
+    pub line_seq: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,7 +93,7 @@ pub struct Arity {
 
 const OPF_STACKED: u8 = 64;
 
-/// All call sites of `ir`, in source (pre-)order.
+/// All call sites of `ir`, in pre-order of the op tree.
 pub fn call_sites(ir: &SubIr) -> Vec<CallSite> {
     let mut out = Vec::new();
     super::walk_with_lines(ir, |n, line| match n.name.as_str() {
@@ -86,7 +105,66 @@ pub fn call_sites(ir: &SubIr) -> Vec<CallSite> {
         }
         _ => {}
     });
+    number_in_lines(ir, &mut out);
     out
+}
+
+/// Set [`CallSite::line_seq`].
+fn number_in_lines(ir: &SubIr, sites: &mut [CallSite]) {
+    let mut order: Vec<u32> = Vec::new();
+    source_order(&ir.root, &mut order);
+    let rank: HashMap<u32, usize> = order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let mut ix: Vec<usize> = (0..sites.len()).collect();
+    ix.sort_by_key(|&i| (sites[i].line, rank.get(&sites[i].node).copied().unwrap_or(usize::MAX), i));
+    let mut prev: Option<Option<u32>> = None;
+    let mut seq = 0;
+    for i in ix {
+        if prev != Some(sites[i].line) {
+            prev = Some(sites[i].line);
+            seq = 0;
+        }
+        sites[i].line_seq = seq;
+        seq += 1;
+    }
+}
+
+/// Node ids of the calls (`entersub` / `goto`) under `n`, in the order
+/// their callee names appear in the source (see [`CallSite::line_seq`]).
+fn source_order(n: &OpNode, out: &mut Vec<u32>) {
+    match n.name.as_str() {
+        "entersub" => {
+            let (args, last) = split_entersub(n);
+            match last {
+                Some(m) if m.name.starts_with("method") => {
+                    let mut rest = args.as_slice();
+                    if let Some((inv, more)) = rest.split_first() {
+                        source_order(inv, out);
+                        rest = more;
+                    }
+                    out.push(n.id);
+                    rest.iter().for_each(|a| source_order(a, out));
+                    source_order(m, out);
+                }
+                _ => {
+                    out.push(n.id);
+                    if let Some(c) = last {
+                        source_order(c, out);
+                    }
+                    args.iter().for_each(|a| source_order(a, out));
+                }
+            }
+        }
+        "goto" => {
+            out.push(n.id);
+            n.kids.iter().for_each(|k| source_order(k, out));
+        }
+        // the right-hand side is the first kid
+        "sassign" | "aassign" if n.kids.len() == 2 => {
+            source_order(&n.kids[1], out);
+            source_order(&n.kids[0], out);
+        }
+        _ => n.kids.iter().for_each(|k| source_order(k, out)),
+    }
 }
 
 fn gv_name(n: &OpNode) -> Option<String> {
@@ -201,6 +279,7 @@ fn entersub_site(ir: &SubIr, n: &OpNode, line: Option<u32>) -> CallSite {
         pairs,
         pairs_from,
         kind: kind.into(),
+        line_seq: 0,
     }
 }
 
@@ -278,6 +357,7 @@ fn goto_site(ir: &SubIr, n: &OpNode, line: Option<u32>) -> Option<CallSite> {
         pairs_from: 0,
         forwards_args: true,
         kind: "goto".into(),
+        line_seq: 0,
     })
 }
 
@@ -329,6 +409,21 @@ mod tests {
 
         assert_eq!(c[6].callee, Callee::Dynamic("$cb".into()));
         assert_eq!(c[6].argc, Arity { min: 1, max: Some(1) });
+    }
+
+    #[test]
+    fn line_seq_numbers_each_line() {
+        let ir = ir_of(include_str!("../../../../t/golden/5.42-threaded/calls_mixed.json"));
+        let c = call_sites(&ir);
+        let mut seen: Vec<(Option<u32>, u32)> = c.iter().map(|s| (s.line, s.line_seq)).collect();
+        let n = seen.len();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), n, "(line, line_seq) is unique: {seen:?}");
+        for s in &c {
+            let before = c.iter().filter(|o| o.line == s.line && o.line_seq < s.line_seq).count();
+            assert_eq!(before as u32, s.line_seq, "line_seq counts from 0 per line");
+        }
     }
 
     #[test]

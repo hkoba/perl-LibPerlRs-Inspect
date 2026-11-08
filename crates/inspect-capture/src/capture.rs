@@ -78,11 +78,7 @@ pub fn capture_main_full(perl: &Perl) -> Result<Captured, String> {
 
 /// Capture the tree under `root` (executed from `start`), resolving pad
 /// references through `cv`'s padlist
-pub(crate) fn capture_tree(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> SubIr {
-    capture_tree_full(perl, cv, root, start).ir
-}
-
-fn capture_tree_full(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> Captured {
+pub(crate) fn capture_tree_full(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> Captured {
     let mut cap = Capturer {
         my_perl: perl.as_ptr(),
         cv,
@@ -132,6 +128,28 @@ fn capture_tree_full(perl: &Perl, cv: Cv, root: *const op, start: *const op) -> 
         }
     }
     Captured { ir, anon_cvs }
+}
+
+/// The anonymous subs of a captured tree and those nested in them, each
+/// captured in turn: pre-order (a sub before the ones it contains), in
+/// the order of `cap.ir.anon_subs`. Subs without an op tree are left out.
+pub fn capture_anon_subs(perl: &Perl, cap: &Captured) -> Vec<SubIr> {
+    fn rec(perl: &Perl, cvs: &[(u32, Cv)], seen: &mut Vec<usize>, out: &mut Vec<SubIr>) {
+        for (_, cv) in cvs {
+            let key = cv.as_ptr() as usize;
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            if let Ok(c) = capture_sub_full(perl, *cv) {
+                out.push(c.ir);
+                rec(perl, &c.anon_cvs, seen, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    rec(perl, &cap.anon_cvs, &mut Vec::new(), &mut out);
+    out
 }
 
 /// (min line, max line) over the COPs of a sub's tree, without capturing

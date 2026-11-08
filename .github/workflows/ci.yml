@@ -94,3 +94,20 @@ jobs:
       # PERL pins libperl-config to the perl set up above
       - name: Cargo workspace tests
         run: PERL="$(command -v perl)" cargo test --workspace --locked
+
+      # Every .pm of this perl's privlib through perl-inspect, plain and
+      # with every analysis: fails on a file that times out or runs out
+      # of memory (a runaway analysis); the per-file times are uploaded
+      - name: Smoke over the core modules
+        run: |
+          PERL="$(command -v perl)" cargo build --release --locked -p inspect-cli
+          tools/smoke-core.sh -t 20 -o smoke-core.tsv
+          tools/smoke-core.sh -t 20 -o smoke-core-deep.tsv --deep --passes=calls,lints,types,logic,returns
+
+      - name: Upload smoke timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.perl-version }}-${{ matrix.threaded && 'threaded' || 'nonthreaded' }}
+          path: smoke-core*.tsv
+          if-no-files-found: ignore

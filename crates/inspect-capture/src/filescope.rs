@@ -14,9 +14,12 @@
 //! found in `@INC`), which a `#line` directive in the file does not
 //! change. [`want`] limits the capture to the given files; this is the
 //! recommended use, since the op tree of every other file is then left
-//! alone. [`enable`] captures every file. Only the pad entries are kept
-//! (the op tree copy is dropped); a file compiled twice keeps the later
-//! one.
+//! alone. [`enable`] captures every file. For a file named by [`want`]
+//! the copy of its top level is kept whole ([`file_scope`]: the tree and
+//! its anonymous subs, which are freed with the file's eval frame too),
+//! so that analyses of the top level can run later; of the files captured
+//! by [`enable`] alone only the pad entries are kept. A file compiled
+//! twice keeps the later one.
 //!
 //! Limits: the same as `reqtrace` — only `require` ops built after
 //! [`enable`] / [`want`] are seen, so call them before the code that
@@ -28,7 +31,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use inspect_core::ir::PadEntry;
+use inspect_core::ir::{PadEntry, SubIr};
 use libperl_rs::{Cv, Perl, Sv};
 use libperl_sys as sys;
 use libperl_sys::{PerlInterpreter, thx};
@@ -39,9 +42,20 @@ enum Targets {
     Only(HashSet<String>),
 }
 
+/// The top level of a file named by [`want`], as compiled by `require`.
+#[derive(Debug, Clone)]
+pub struct FileScope {
+    /// The top-level tree (root `leaveeval`).
+    pub ir: SubIr,
+    /// Its anonymous subs, nested ones included (see
+    /// [`capture_anon_subs`](crate::capture_anon_subs)).
+    pub anon_subs: Vec<SubIr>,
+}
+
 thread_local! {
     static TARGETS: RefCell<Targets> = RefCell::new(Targets::Only(HashSet::new()));
     static FILE_PADS: RefCell<HashMap<String, Vec<PadEntry>>> = RefCell::new(HashMap::new());
+    static FILE_SCOPES: RefCell<HashMap<String, FileScope>> = RefCell::new(HashMap::new());
 }
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -81,10 +95,24 @@ fn wanted(file: &str) -> bool {
     })
 }
 
+/// Named by [`want`] (not only covered by [`enable`]).
+fn named(file: &str) -> bool {
+    TARGETS.with(|t| match &*t.borrow() {
+        Targets::All => false,
+        Targets::Only(set) => set.contains(file),
+    })
+}
+
 /// The top-level pad entries of `file`, as compiled by a `require` while
 /// enabled; None when no such compile was seen.
 pub fn file_pad(file: &str) -> Option<Vec<PadEntry>> {
     FILE_PADS.with(|m| m.borrow().get(file).cloned())
+}
+
+/// The top level of `file`, as compiled by a `require` while it was named
+/// by [`want`]; None when no such compile was seen.
+pub fn file_scope(file: &str) -> Option<FileScope> {
+    FILE_SCOPES.with(|m| m.borrow().get(file).cloned())
 }
 
 /// Called after the original `pp_require` returned; `cxix` is
@@ -117,8 +145,16 @@ pub(crate) unsafe fn after_require(my_perl: *mut PerlInterpreter, cxix: i32) {
         if !wanted(&file) {
             return;
         }
-        let ir = crate::capture::capture_tree(&perl, cv, root, sys::PL_eval_start!(my_perl));
-        FILE_PADS.with(|m| m.borrow_mut().insert(file, ir.pad));
+        let cap = crate::capture::capture_tree_full(&perl, cv, root, sys::PL_eval_start!(my_perl));
+        FILE_PADS.with(|m| m.borrow_mut().insert(file.clone(), cap.ir.pad.clone()));
+        if named(&file) {
+            let anon_subs = crate::capture::capture_anon_subs(&perl, &cap);
+            let scope = FileScope {
+                ir: cap.ir,
+                anon_subs,
+            };
+            FILE_SCOPES.with(|m| m.borrow_mut().insert(file, scope));
+        }
     }
 }
 

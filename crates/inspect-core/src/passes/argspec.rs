@@ -864,6 +864,200 @@ fn spec_from_summary(ir: &SubIr, sum: &Summary) -> ArgSpec {
         notes,
     }
 }
+/// The argument spec without symbolic execution: a signature, or else
+/// the leading run of argument-extraction statements of the body (`my
+/// (...) = @_`, `my $x = shift`) and the `$_[n]` accesses anywhere in it
+/// (the analysis before [`super::symexec`]). Cheap and bounded by the
+/// size of the body, for callers that cannot afford the symbolic
+/// execution or need to avoid it.
+pub fn analyze_args_preamble(ir: &SubIr) -> ArgSpec {
+    if let Some(spec) = detect_signature(ir) {
+        return spec;
+    }
+    let mut params: Vec<Param> = Vec::new();
+    let mut styles: Vec<&str> = Vec::new();
+    let mut slurpy = false;
+    let mut next_index: u64 = 0;
+
+    // the preamble: the leading run of argument-extraction statements
+    for (line, stmt) in super::statements(ir) {
+        let s = stmt.skip_null();
+        if let Some(name) = preamble::shift_into_pad(ir, s) {
+            params.push(Param {
+                name: Some(name),
+                index: next_index,
+                source: "shift".into(),
+                alts: vec![Slot::Front(next_index)],
+                line,
+                ..Param::new()
+            });
+            next_index += 1;
+            if !styles.contains(&"shift") {
+                styles.push("shift");
+            }
+            continue;
+        }
+        if let Some((names, has_slurpy)) = preamble::unpack_from_args(ir, s) {
+            for name in names {
+                let rest = name.starts_with('@') || name.starts_with('%');
+                params.push(Param {
+                    name: Some(name),
+                    index: next_index,
+                    source: "unpack".into(),
+                    alts: vec![if rest {
+                        Slot::Rest(next_index)
+                    } else {
+                        Slot::Front(next_index)
+                    }],
+                    line,
+                    ..Param::new()
+                });
+                if !rest {
+                    next_index += 1;
+                }
+            }
+            slurpy = slurpy || has_slurpy;
+            if !styles.contains(&"unpack") {
+                styles.push("unpack");
+            }
+            continue;
+        }
+        break; // a statement that is not argument extraction ends the preamble
+    }
+
+    // direct $_[n] access (whole tree)
+    let mut max_elem: Option<(i64, Option<u32>)> = None;
+    super::walk_with_lines(ir, |node, line| {
+        if let Some(ix) = preamble::arg_elem_index(node) {
+            if max_elem.is_none_or(|(m, _)| ix > m) {
+                max_elem = Some((ix, line));
+            }
+        }
+    });
+    if let Some((m, line)) = max_elem.filter(|(m, _)| *m >= 0) {
+        if !styles.contains(&"positional") {
+            styles.push("positional");
+        }
+        for ix in 0..=m as u64 {
+            if !params.iter().any(|p| p.index == ix) {
+                params.push(Param {
+                    index: ix,
+                    source: "elem".into(),
+                    alts: vec![Slot::Front(ix)],
+                    line,
+                    ..Param::new()
+                });
+            }
+        }
+    }
+
+    let style = match styles.as_slice() {
+        [] => "none".to_string(),
+        [one] => one.to_string(),
+        _ => "mixed".to_string(),
+    };
+    let positional = params
+        .iter()
+        .filter(|p| p.name.as_deref().is_none_or(|n| !n.starts_with('@') && !n.starts_with('%')))
+        .count() as u64;
+    ArgSpec {
+        style,
+        // these patterns cannot tell required from optional: only a
+        // `$_[n]` access gives grounds for a lower bound
+        min_arity: max_elem.map_or(0, |(m, _)| (m + 1).max(0) as u64),
+        // an upper bound is only known for an unpack without a slurpy
+        max_arity: (!slurpy && styles == ["unpack"]).then_some(positional),
+        invocant_guess: guess_invocant(&params),
+        params,
+        notes: vec!["preamble only (no symbolic execution)".into()],
+        ..ArgSpec::empty()
+    }
+}
+
+/// The statement patterns of [`analyze_args_preamble`].
+mod preamble {
+    use crate::ir::{OpDetail, OpNode, SubIr, SvLit};
+
+    /// `my $x = shift;` → padsv_store(targ=$x) with a bare shift as its
+    /// child (the older form sassign(shift, padsv) is also handled)
+    pub(super) fn shift_into_pad(ir: &SubIr, s: &OpNode) -> Option<String> {
+        match s.name.as_str() {
+            "padsv_store" => {
+                let k = s.kids.first()?.skip_null();
+                (k.name == "shift" && shifts_args(k)).then(|| ir.pad_name(s.targ).map(String::from))?
+            }
+            "sassign" => {
+                let rhs = s.kids.first()?.skip_null();
+                let lhs = s.kids.get(1)?.skip_null();
+                (rhs.name == "shift" && shifts_args(rhs) && lhs.name == "padsv")
+                    .then(|| ir.pad_name(lhs.targ).map(String::from))?
+            }
+            _ => None,
+        }
+    }
+
+    /// The shift is on `@_` (bare, or `shift @_`).
+    fn shifts_args(shift: &OpNode) -> bool {
+        shift.kids.is_empty() || has_args_av(shift)
+    }
+
+    /// `my (...) = @_;` → aassign(rv2av(*_) on the RHS, pad variables on
+    /// the LHS): the names, and whether one of them is an array / hash
+    pub(super) fn unpack_from_args(ir: &SubIr, s: &OpNode) -> Option<(Vec<String>, bool)> {
+        if s.name != "aassign" {
+            return None;
+        }
+        let (rhs, lhs) = (s.kids.first()?, s.kids.get(1)?);
+        if !has_args_av(rhs) {
+            return None;
+        }
+        let mut names = Vec::new();
+        let mut slurpy = false;
+        lhs_targets(ir, lhs, &mut names, &mut slurpy);
+        (!names.is_empty()).then_some((names, slurpy))
+    }
+
+    fn lhs_targets(ir: &SubIr, n: &OpNode, names: &mut Vec<String>, slurpy: &mut bool) {
+        let n = n.skip_null();
+        match n.name.as_str() {
+            "padsv" | "padav" | "padhv" => {
+                if let Some(name) = ir.pad_name(n.targ) {
+                    names.push(name.to_string());
+                    *slurpy |= n.name != "padsv";
+                }
+            }
+            _ => n.kids.iter().for_each(|k| lhs_targets(ir, k, names, slurpy)),
+        }
+    }
+
+    fn is_args_gv(n: &OpNode) -> bool {
+        matches!(&n.detail, OpDetail::Gv { name, stash }
+            if name == "_" && stash.as_deref().unwrap_or("main") == "main")
+    }
+
+    /// The subtree contains `@_` (rv2av of gv *_)
+    fn has_args_av(n: &OpNode) -> bool {
+        let n = n.skip_null();
+        (n.name == "rv2av" && n.kids.first().is_some_and(|k| is_args_gv(k.skip_null())))
+            || n.kids.iter().any(has_args_av)
+    }
+
+    /// `$_[n]`: the index is the op_private of aelemfast (gv *_); the
+    /// aelem(rv2av(*_), const n) form is also covered
+    pub(super) fn arg_elem_index(n: &OpNode) -> Option<i64> {
+        // nulls are not skipped: the aelemfast under ex-aelem is the real op
+        if n.name == "aelemfast" && is_args_gv(n) {
+            return Some(n.private as i8 as i64);
+        }
+        if n.name == "aelem" && n.kids.len() == 2 && has_args_av(&n.kids[0]) {
+            if let OpDetail::Const(SvLit::Iv(ix)) = &n.kids[1].skip_null().detail {
+                return Some(*ix);
+            }
+        }
+        None
+    }
+}
+
 fn guess_invocant(params: &[Param]) -> Option<String> {
     let first = params.iter().find(|p| p.index == 0)?;
     let name = first.name.as_deref()?;
@@ -1130,5 +1324,19 @@ mod tests {
         assert_eq!(s.style, "unpack");
         let s = spec(golden!("shift_style"));
         assert_eq!(s.style, "shift");
+    }
+
+    #[test]
+    fn preamble_matches_the_leading_statements() {
+        let pre = |g: &str| analyze_args_preamble(&ir_of(g));
+        let names = |s: &ArgSpec| s.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        for g in [golden!("unpack_args"), golden!("shift_style")] {
+            let (p, full) = (pre(g), spec(g));
+            assert_eq!(p.style, full.style);
+            assert_eq!(names(&p), names(&full));
+            assert!(p.notes[0].contains("preamble"), "{:?}", p.notes);
+        }
+        // a signature is exact either way
+        assert_eq!(pre(golden!("signature")), spec(golden!("signature")));
     }
 }

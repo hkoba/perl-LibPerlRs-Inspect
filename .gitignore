@@ -10,3 +10,6 @@
 /META.json
 /pm_to_blib
 /LibPerlRs-Inspect-*
+
+# tools/smoke-core.sh output
+/smoke-core*.tsv

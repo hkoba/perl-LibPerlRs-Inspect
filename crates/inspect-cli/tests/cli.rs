@@ -259,3 +259,20 @@ fn analyze_prefix() {
         .any(|s| s["provenance"] == "imported" && s.get("args").is_some());
     assert!(!others_analyzed);
 }
+
+#[test]
+fn passes_and_preamble() {
+    let v = run(&["--passes=calls,lints", "--args=preamble", "-e", "sub f { my ($x) = @_; g($x) } f(1);"]);
+    let f = &v["packages"]["main"]["subs"]["f"];
+    assert_eq!(f["calls"][0]["callee"]["named"]["name"], "main::g");
+    assert!(f["lints"].is_object(), "{f}");
+    assert!(f.get("logic").is_none());
+    assert_eq!(f["args"]["params"][0]["name"], "$x");
+    assert_eq!(v["file_calls"][0]["callee"]["named"]["name"], "main::f");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_perl-inspect"))
+        .args(["--passes=nope", "-e", "1"])
+        .output()
+        .expect("spawn perl-inspect");
+    assert!(!out.status.success());
+}

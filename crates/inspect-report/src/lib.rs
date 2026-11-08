@@ -7,9 +7,24 @@
 //!   - stash walk + **provenance tags** (file / imported / xs)
 //!   - file / line range / prototype per CV
 //!   - argspec of file-defined subs (or, with [`ReportOpts::deep`], the
-//!     full analysis report: args / returns / logic / types / lints); with
-//!     [`ReportOpts::analyze_prefixes`] also of subs from other files under
-//!     the given path prefixes (e.g. the workspace's `lib/`)
+//!     full analysis report: args / returns / logic / types / lints /
+//!     calls); with [`ReportOpts::analyze_prefixes`] also of subs from
+//!     other files under the given path prefixes (e.g. the workspace's
+//!     `lib/`). [`ReportOpts::passes`] adds single analyses next to `args`
+//!     instead (`"calls": [...]`, `"lints": {...}`), in the form they have
+//!     in the full report
+//!   - `file_calls`, `file_lints`, …: the passes of [`ReportOpts::passes`]
+//!     run on the top level of the compiled file (the statements outside
+//!     any sub: `main(@ARGV);`, `Foo->new(k => 1);`). Taken from the main
+//!     program, or from a file compiled as a module that was named with
+//!     [`FileLexicals::Files`] / [`want_file_lexicals`]. When the top level
+//!     is not available the key is left out and `file_calls_error` (etc.)
+//!     says why
+//!   - `anon_subs` of each analyzed sub, and `file_anon_subs` of the top
+//!     level: the anonymous subs written in it (nested ones too, flattened
+//!     in source order), each as `{"lines": [a, b], "lexicals": [...],
+//!     "args": {...}}` plus the selected passes. Left out when there are
+//!     none
 //!   - the target file's own `use` statements (`uses`) and opaque `BEGIN`
 //!     blocks (`opaque_begins`)
 //!   - `lexicals` of each analyzed sub: name, `pad_ix`, `decl`
@@ -111,6 +126,7 @@
 use std::collections::BTreeMap;
 
 use inspect_capture::packages;
+use inspect_core::ir::SubIr;
 use libperl_rs::{Perl, StashWalker, SubEntry};
 use serde_json::{Map, Value, json};
 
@@ -125,8 +141,17 @@ pub const SCHEMA_VERSION: u32 = 1;
 #[non_exhaustive]
 pub struct ReportOpts {
     /// Embed the full analysis report (args / returns / logic / types /
-    /// lints) in each file-defined sub instead of argspec alone.
+    /// lints / calls) in each file-defined sub (key `report`) instead of
+    /// argspec alone.
     pub deep: bool,
+    /// Analyses to run besides the argument spec: for each analyzed sub
+    /// (unless [`ReportOpts::deep`] puts them all in its `report`), for
+    /// each anonymous sub, and for the top level of the compiled file
+    /// (`file_calls`, …). Each comes out under [`Pass::key`] in the form
+    /// it has in the full report.
+    pub passes: Vec<Pass>,
+    /// How argument specs are inferred.
+    pub args_analysis: ArgsAnalysis,
     /// Also analyze (lines / args or report / lexicals) the subs defined
     /// in other files whose path (CvFILE) starts with one of these
     /// prefixes — e.g. the workspace's `lib/`. Plain string prefix match:
@@ -139,6 +164,71 @@ pub struct ReportOpts {
     /// executes in place of their calls; subs of the same home package
     /// are executed too.
     pub symexec_helpers: Vec<String>,
+}
+
+/// An analysis that [`ReportOpts::passes`] selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Pass {
+    /// Call sites (`inspect_core::passes::callsites`).
+    Calls,
+    Lints,
+    /// Variable type facets.
+    Types,
+    /// Truth tables of the guard conditions.
+    Logic,
+    /// Return values and exceptions.
+    Returns,
+}
+
+impl Pass {
+    pub const ALL: [Pass; 5] = [Pass::Calls, Pass::Lints, Pass::Types, Pass::Logic, Pass::Returns];
+
+    /// The key of the result (as in the full report); the top level's is
+    /// prefixed with `file_`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Pass::Calls => "calls",
+            Pass::Lints => "lints",
+            Pass::Types => "types",
+            Pass::Logic => "logic",
+            Pass::Returns => "returns",
+        }
+    }
+
+    /// The pass named by its [`Pass::key`].
+    pub fn parse(s: &str) -> Option<Pass> {
+        Pass::ALL.into_iter().find(|p| p.key() == s)
+    }
+
+    fn run(self, ir: &SubIr) -> Value {
+        use inspect_core::passes::{callsites, lints, logic, retspec, types};
+        let v = match self {
+            Pass::Calls => serde_json::to_value(callsites::call_sites(ir)),
+            Pass::Lints => serde_json::to_value(lints::analyze_lints(ir)),
+            Pass::Types => serde_json::to_value(types::analyze_types(ir)),
+            Pass::Logic => serde_json::to_value(logic::analyze_logic(ir)),
+            Pass::Returns => serde_json::to_value(retspec::analyze_returns(ir)),
+        };
+        v.expect("serialize pass result")
+    }
+}
+
+/// How argument specs are inferred.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ArgsAnalysis {
+    /// Symbolic execution of the whole body (with
+    /// [`ReportOpts::symexec_helpers`] inlined). Bounded per sub: past its
+    /// budget the spec is what was found so far, with a note
+    /// (`"symexec budget exceeded"`).
+    #[default]
+    Symexec,
+    /// A signature, or else the leading `my (...) = @_` / `my $x = shift`
+    /// statements and `$_[n]` accesses only (no symbolic execution;
+    /// `symexec_helpers` are not used). The way out when the symbolic
+    /// execution misbehaves.
+    Preamble,
 }
 
 /// Options for [`prepare_with`].
@@ -296,28 +386,72 @@ pub fn report(perl: &Perl, main_file: &str, opts: &ReportOpts) -> Value {
     if let Some(e) = uses_error {
         out["uses_error"] = json!(e);
     }
-    match file_lexicals(perl, main_file) {
-        Ok(lex) => out["file_lexicals"] = lex,
+    let top = file_top(perl, main_file);
+    match &top.pad {
+        Ok(pad) => out["file_lexicals"] = lexicals(pad),
         Err(e) => out["file_lexicals_error"] = json!(e),
+    }
+    match &top.scope {
+        Ok((ir, anon)) => {
+            for p in &opts.passes {
+                out[format!("file_{}", p.key())] = p.run(ir);
+            }
+            if !anon.is_empty() {
+                out["file_anon_subs"] = anon_entries(perl, anon, opts);
+            }
+        }
+        Err(e) => {
+            for p in &opts.passes {
+                out[format!("file_{}_error", p.key())] = json!(e);
+            }
+        }
     }
     out
 }
 
-/// Top-level lexicals of `main_file` (U6): from the main CV when it is
-/// the main program (`$0`), otherwise from the pad kept when `require`
-/// compiled it (see [`prepare`]).
-fn file_lexicals(perl: &Perl, main_file: &str) -> Result<Value, String> {
+/// What is known of the top level of the compiled file.
+struct FileTop {
+    /// Its pad (for `file_lexicals`).
+    pad: Result<Vec<inspect_core::ir::PadEntry>, String>,
+    /// Its tree and anonymous subs (for the passes).
+    scope: Result<(SubIr, Vec<SubIr>), String>,
+}
+
+/// The top level of `main_file`: the main CV when it is the main program
+/// (`$0`), otherwise what was kept when `require` compiled it (see
+/// [`prepare`]): the pad of every file captured, the tree of a file named
+/// with [`FileLexicals::Files`] / [`want_file_lexicals`].
+fn file_top(perl: &Perl, main_file: &str) -> FileTop {
     if self::main_file(perl).as_deref() == Some(main_file) {
-        return inspect_capture::capture_main(perl).map(|ir| lexicals(&ir.pad));
+        return match inspect_capture::capture_main_full(perl) {
+            Ok(cap) => {
+                let anon = inspect_capture::capture_anon_subs(perl, &cap);
+                FileTop {
+                    pad: Ok(cap.ir.pad.clone()),
+                    scope: Ok((cap.ir, anon)),
+                }
+            }
+            Err(e) => FileTop {
+                pad: Err(e.clone()),
+                scope: Err(e),
+            },
+        };
     }
-    inspect_capture::filescope::file_pad(main_file)
-        .map(|pad| lexicals(&pad))
-        .ok_or_else(|| {
-            format!(
-                "the top level of {main_file} was not seen compiled: it is not the main program, \
-                 and no require compiled it after prepare()"
-            )
-        })
+    let not_seen = format!(
+        "the top level of {main_file} was not seen compiled: it is not the main program, \
+         and no require compiled it after prepare()"
+    );
+    let pad = inspect_capture::filescope::file_pad(main_file).ok_or_else(|| not_seen.clone());
+    let scope = match inspect_capture::filescope::file_scope(main_file) {
+        Some(fs) => Ok((fs.ir, fs.anon_subs)),
+        None if pad.is_ok() => Err(format!(
+            "the top level of {main_file} was compiled by require, but only its pad was kept: \
+             name the file in PrepareOpts::file_lexicals (FileLexicals::Files) or with \
+             want_file_lexicals() to keep its tree"
+        )),
+        None => Err(not_seen),
+    };
+    FileTop { pad, scope }
 }
 
 /// Build the report entry for a single sub.
@@ -373,27 +507,31 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> V
                     .any(|p| !p.is_empty() && f.starts_with(p.as_str()))
             }));
     if analyze {
-        match inspect_capture::capture_sub(perl, cv) {
-            Ok(ir) => {
+        match inspect_capture::capture_sub_full(perl, cv) {
+            Ok(cap) => {
+                let ir = &cap.ir;
                 if let Some((lo, hi)) = ir.lines {
                     m.insert("lines".into(), json!([lo, hi]));
                 }
                 m.insert("lexicals".into(), lexicals(&ir.pad));
                 if opts.deep {
-                    let mut report = inspect_core::passes::analyze(&ir);
-                    if !opts.symexec_helpers.is_empty() {
-                        report.args = analyze_args(perl, &ir, opts);
-                    }
                     m.insert(
                         "report".into(),
-                        serde_json::to_value(report).expect("serialize report"),
+                        serde_json::to_value(deep_report(perl, ir, opts)).expect("serialize report"),
                     );
                 } else {
-                    let args = analyze_args(perl, &ir, opts);
+                    let args = analyze_args(perl, ir, opts);
                     m.insert(
                         "args".into(),
                         serde_json::to_value(args).expect("serialize argspec"),
                     );
+                    for p in &opts.passes {
+                        m.insert(p.key().into(), p.run(ir));
+                    }
+                }
+                let anon = inspect_capture::capture_anon_subs(perl, &cap);
+                if !anon.is_empty() {
+                    m.insert("anon_subs".into(), anon_entries(perl, &anon, opts));
                 }
             }
             Err(err) => {
@@ -404,13 +542,49 @@ fn sub_entry(perl: &Perl, e: &SubEntry, main_file: &str, opts: &ReportOpts) -> V
     Value::Object(m)
 }
 
-/// The argument spec of `ir`, with `opts.symexec_helpers` inlined.
-fn analyze_args(
-    perl: &Perl,
-    ir: &inspect_core::ir::SubIr,
-    opts: &ReportOpts,
-) -> inspect_core::passes::argspec::ArgSpec {
+/// The full analysis report of `ir` (as `inspect_core::passes::analyze`,
+/// with the argument spec of [`analyze_args`]).
+fn deep_report(perl: &Perl, ir: &SubIr, opts: &ReportOpts) -> inspect_core::passes::AnalysisReport {
+    use inspect_core::passes::{AnalysisReport, callsites, lints, logic, retspec, types};
+    AnalysisReport {
+        args: analyze_args(perl, ir, opts),
+        returns: retspec::analyze_returns(ir),
+        logic: logic::analyze_logic(ir),
+        types: types::analyze_types(ir),
+        lints: lints::analyze_lints(ir),
+        calls: callsites::call_sites(ir),
+    }
+}
+
+/// `anon_subs` entries: lines, lexicals, argument spec and the selected
+/// passes of each anonymous sub.
+fn anon_entries(perl: &Perl, anon: &[SubIr], opts: &ReportOpts) -> Value {
+    anon.iter()
+        .map(|ir| {
+            let mut e = Map::new();
+            if let Some((lo, hi)) = ir.lines {
+                e.insert("lines".into(), json!([lo, hi]));
+            }
+            e.insert("lexicals".into(), lexicals(&ir.pad));
+            e.insert(
+                "args".into(),
+                serde_json::to_value(analyze_args(perl, ir, opts)).expect("serialize argspec"),
+            );
+            for p in &opts.passes {
+                e.insert(p.key().into(), p.run(ir));
+            }
+            Value::Object(e)
+        })
+        .collect()
+}
+
+/// The argument spec of `ir` (see [`ArgsAnalysis`]), with
+/// `opts.symexec_helpers` inlined.
+fn analyze_args(perl: &Perl, ir: &SubIr, opts: &ReportOpts) -> inspect_core::passes::argspec::ArgSpec {
     use inspect_core::passes::{argspec, symexec::Limits};
+    if opts.args_analysis == ArgsAnalysis::Preamble {
+        return argspec::analyze_args_preamble(ir);
+    }
     if opts.symexec_helpers.is_empty() {
         return argspec::analyze_args(ir);
     }

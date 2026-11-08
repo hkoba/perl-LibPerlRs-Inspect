@@ -8,6 +8,7 @@
 ^plan\.md$
 ^gemini-advice\.md$
 ^test\.zsh$
+^tools/
 ^\.gitignore$
 ^\.claude/
 ^\.github/

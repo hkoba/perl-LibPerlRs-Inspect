@@ -264,6 +264,20 @@ other than where it is listed (an import, a glob alias) carries its
 `home` package and name. `--analyze-prefix=PATH`
 (repeatable) also analyzes subs defined in other files under PATH, e.g.
 `perl-inspect -Ilib --analyze-prefix=lib/ script.pl`.
+`--passes=calls,lints,types,logic,returns` adds just those analyses to
+each sub (next to `args`, in the form they have in the full report), to
+the file's top level (`file_calls`, `file_lints`, …: the statements
+outside any sub) and to each anonymous sub (`anon_subs` /
+`file_anon_subs`, which also list the anonymous sub's `lexicals` and
+`args`). `--args=preamble` infers argument specs from the leading
+`my (...) = @_` / `shift` statements only, without the symbolic
+execution.
+
+Every analysis of a sub is bounded: the symbolic execution behind
+`args` stops at a budget (and notes `"symexec budget exceeded"`), and a
+truth table with more routes than it keeps is cut short with
+`"truncated": true`. `tools/smoke-core.sh` runs `perl-inspect` over every
+`.pm` of perl's privlib and fails on a file that times out (CI runs it).
 
 ```console
 $ cargo build -p inspect-cli --release

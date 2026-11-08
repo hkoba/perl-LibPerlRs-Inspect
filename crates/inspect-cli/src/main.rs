@@ -22,16 +22,22 @@
 //! `--analyze-prefix=PATH` (repeatable) also analyzes subs defined in
 //! other files whose path starts with PATH (e.g. `--analyze-prefix=lib/`
 //! together with `-Ilib`).
+//! `--passes=calls,lints,...` adds those analyses (calls / lints / types /
+//! logic / returns) to each sub and to the file's top level
+//! (`file_calls`, ...).
+//! `--args=preamble` infers argument specs without symbolic execution.
 
 use std::env;
 use std::process::ExitCode;
 
-use inspect_report::ReportOpts;
+use inspect_report::{ArgsAnalysis, Pass, ReportOpts};
 use libperl_rs::Perl;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: perl-inspect [--deep] [--analyze-prefix=PATH]... [--symexec-helper=NAME]...\n\
+        "usage: perl-inspect [--deep] [--passes=calls,lints,types,logic,returns]\n\
+         \x20                   [--args=symexec|preamble]\n\
+         \x20                   [--analyze-prefix=PATH]... [--symexec-helper=NAME]...\n\
          \x20                   <file.pm | -e 'code' | perl args...>\n\
          \n\
          Compiles the target with an embedded perl (BEGIN/use run, the\n\
@@ -45,6 +51,8 @@ fn main() -> ExitCode {
     let mut deep = false;
     let mut analyze_prefixes: Vec<String> = Vec::new();
     let mut symexec_helpers: Vec<String> = Vec::new();
+    let mut passes: Vec<Pass> = Vec::new();
+    let mut args_analysis = ArgsAnalysis::default();
     let mut rest: Vec<String> = Vec::new();
     for a in env::args().skip(1) {
         match a.as_str() {
@@ -55,6 +63,20 @@ fn main() -> ExitCode {
             _ if rest.is_empty() && a.starts_with("--symexec-helper=") => {
                 symexec_helpers.push(a["--symexec-helper=".len()..].to_string())
             }
+            _ if rest.is_empty() && a.starts_with("--passes=") => {
+                for name in a["--passes=".len()..].split(',').filter(|s| !s.is_empty()) {
+                    match Pass::parse(name) {
+                        Some(p) if !passes.contains(&p) => passes.push(p),
+                        Some(_) => {}
+                        None => {
+                            eprintln!("perl-inspect: unknown pass {name:?}");
+                            return usage();
+                        }
+                    }
+                }
+            }
+            "--args=symexec" if rest.is_empty() => args_analysis = ArgsAnalysis::Symexec,
+            "--args=preamble" if rest.is_empty() => args_analysis = ArgsAnalysis::Preamble,
             "--help" | "-h" if rest.is_empty() => return usage(),
             _ => rest.push(a),
         }
@@ -88,6 +110,8 @@ fn main() -> ExitCode {
     opts.deep = deep;
     opts.analyze_prefixes = analyze_prefixes;
     opts.symexec_helpers = symexec_helpers;
+    opts.passes = passes;
+    opts.args_analysis = args_analysis;
     let out = inspect_report::report(&perl, &main_file, &opts);
     println!("{}", serde_json::to_string_pretty(&out).expect("serialize"));
     ExitCode::SUCCESS
