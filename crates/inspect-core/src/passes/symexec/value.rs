@@ -5,6 +5,8 @@
 //! values built from them. Values the executor cannot follow become
 //! [`Sym::Unknown`] and evaluation goes on.
 
+use std::sync::Arc;
+
 use crate::ir::SvLit;
 
 /// A symbolic value.
@@ -66,8 +68,9 @@ pub enum Sym {
     /// `anoncode` constant when known).
     Code(Option<u32>),
     /// Merged value at a join point: alternatives with the branch
-    /// conditions under which they hold.
-    Join(Vec<(Vec<Cond>, Sym)>),
+    /// conditions under which they hold. Shared, since a joined value is
+    /// copied with the state at every fork.
+    Join(Arc<Vec<(Vec<Cond>, Sym)>>),
     Unknown(&'static str),
 }
 
@@ -197,6 +200,49 @@ impl Sym {
 
     pub fn is_unknown(&self) -> bool {
         matches!(self, Sym::Unknown(_))
+    }
+
+    /// Number of nodes of the value (the conditions of a [`Sym::Join`]
+    /// included), counted up to `cap`: the result is at most `cap`, so the
+    /// cost of the count is bounded too.
+    pub fn size(&self, cap: usize) -> usize {
+        let mut left = cap;
+        self.count(&mut left);
+        cap - left
+    }
+
+    /// Take this value's nodes off `left`; false once it reaches zero.
+    pub(crate) fn count(&self, left: &mut usize) -> bool {
+        if *left == 0 {
+            return false;
+        }
+        *left -= 1;
+        match self {
+            Sym::Const(_)
+            | Sym::Arg(_)
+            | Sym::ArgBack(_)
+            | Sym::ArgRest(_)
+            | Sym::ArgMid(..)
+            | Sym::RefPad { .. }
+            | Sym::Alias { .. }
+            | Sym::Code(_)
+            | Sym::Unknown(_) => true,
+            Sym::List { items, tail } => {
+                items.iter().all(|i| i.count(left)) && tail.as_deref().is_none_or(|t| t.count(left))
+            }
+            Sym::Hash { segs } => segs.iter().all(|s| match s {
+                HashSeg::Pairs(p) => p.iter().all(|(_, v)| v.count(left)),
+                HashSeg::Rest(r) => r.count(left),
+            }),
+            Sym::Ref(x) | Sym::Len(x) | Sym::Deref(x, _) | Sym::Keys(x) => x.count(left),
+            Sym::Elem(x, k) => x.count(left) && k.count(left),
+            Sym::App(_, v) => v.iter().all(|x| x.count(left)),
+            Sym::Default { arg, default, .. } => arg.count(left) && default.count(left),
+            Sym::Call { args, .. } => args.iter().all(|x| x.count(left)),
+            Sym::Join(alts) => alts
+                .iter()
+                .all(|(cs, s)| cs.iter().all(|c| c.sym.count(left)) && s.count(left)),
+        }
     }
 
     /// Whether the value depends on the analyzed sub's arguments.
@@ -352,6 +398,13 @@ impl Sym {
 }
 
 impl Key {
+    fn count(&self, left: &mut usize) -> bool {
+        match self {
+            Key::Sym(s) => s.count(left),
+            _ => true,
+        }
+    }
+
     fn mentions_args(&self) -> bool {
         match self {
             Key::Sym(s) => s.mentions_args(),

@@ -138,6 +138,22 @@ pub const MAX_TABLE_CONDS: usize = 6;
 /// beyond it the branch literals are dropped.
 const MAX_PATH_SET: usize = 1 << MAX_TABLE_CONDS;
 
+/// Upper bounds on the whole result: outcomes, and statements recorded
+/// on them in total (a statement counts once plus once per literal of its
+/// own guard). Each branch carries at most `MAX_PATH_SET` routes,
+/// but a long run of branches with outcomes in between still yields a
+/// path list (and statement lists) far beyond what anyone reads; beyond
+/// these the remaining outcomes are dropped and `truncated` is set.
+const MAX_PATHS: usize = 1024;
+const MAX_STMT_REFS: usize = 10_000;
+
+/// Upper bound on the work of the walk itself (route sets copied across
+/// statements, conditions decomposed), which can grow past the bounds of
+/// the result before any outcome is reached: a chain of `&&` of `||`s
+/// has a product of routes. Beyond it the walk stops and `truncated` is
+/// set.
+const MAX_WORK: usize = 2_000_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogicSpec {
     /// Rendered text of each atomic condition, in order of first
@@ -159,6 +175,14 @@ pub struct LogicSpec {
     /// (index-parallel to `conds`; `None` otherwise).
     #[serde(default)]
     pub cond_negs: Vec<Option<String>>,
+    /// Outcomes were dropped: the sub has more routes than the analysis
+    /// reports (`paths` holds the first ones in walk order).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// An occurrence of an atom: the op node and the line of its statement.
@@ -383,6 +407,9 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         cur_line: None,
         env: Env::new(opts.identity.tracks_generations()),
         paths: Vec::new(),
+        stmt_refs: 0,
+        truncated: false,
+        work: 0,
         loop_depth: 0,
         body_ends: Vec::new(),
     };
@@ -394,6 +421,7 @@ pub fn analyze_logic_stmts(ir: &SubIr, stmts: &[Stmt<'_>], opts: &WalkOpts) -> L
         table,
         cond_sites: w.cond_sites,
         cond_negs: w.cond_negs,
+        truncated: w.truncated,
     }
 }
 
@@ -726,6 +754,13 @@ struct Walker<'a> {
     /// Generations of the variables modified so far.
     env: Env,
     paths: Vec<PathOutcome>,
+    /// Statements recorded on `paths` in total (see `MAX_STMT_REFS`).
+    stmt_refs: usize,
+    /// Outcomes were dropped for exceeding `MAX_PATHS` / `MAX_STMT_REFS`
+    /// / `MAX_WORK`.
+    truncated: bool,
+    /// Work done so far (see `MAX_WORK`).
+    work: usize,
     /// Loops being walked (loop control inside one ends the route in the
     /// body; the loop itself goes on).
     loop_depth: u32,
@@ -761,6 +796,10 @@ impl<'a> Walker<'a> {
         }
         let mut path = path.clone();
         for (i, (line, node)) in stmts.iter().enumerate() {
+            if self.truncated {
+                // the result is full: walking on would only cost time
+                return None;
+            }
             let stmt_tail = tail && i + 1 == stmts.len();
             match self.walk_stmt(*line, node, &path, stmt_tail) {
                 Flow::Terminates => return None,
@@ -773,7 +812,7 @@ impl<'a> Walker<'a> {
                     } else {
                         // too many routes to carry: drop the branch
                         // literals, keep the arm statements (guarded)
-                        fold(&path, set, None)
+                        self.fold(&path, set, None)
                     };
                 }
                 Flow::Continue => {}
@@ -789,6 +828,9 @@ impl<'a> Walker<'a> {
         path: &PathSet,
         tail: bool,
     ) -> Flow {
+        if !self.charge(Self::path_cost(path)) {
+            return Flow::Terminates;
+        }
         self.cur_line = line;
         let n = node.skip_null();
         match n.name.as_str() {
@@ -855,7 +897,7 @@ impl<'a> Walker<'a> {
                     depth: 0,
                     when: Vec::new(),
                 };
-                Flow::ContinueWith(fold(path, rem.unwrap_or_default(), Some(head)))
+                Flow::ContinueWith(self.fold(path, rem.unwrap_or_default(), Some(head)))
             }
             "leaveloop" => self.walk_loop(line, n, path),
             _ => self.plain_stmt(line, node, path, tail),
@@ -975,7 +1017,7 @@ impl<'a> Walker<'a> {
             // side) is the value of the expression.
             for r in &lhs_routes {
                 let v = value_str(r);
-                self.paths.push(PathOutcome {
+                self.push_path(PathOutcome {
                     line,
                     kind: "implicit".into(),
                     exprs: vec![v],
@@ -1036,7 +1078,7 @@ impl<'a> Walker<'a> {
             depth: 0,
             when: Vec::new(),
         };
-        Flow::ContinueWith(fold(path, inner, Some(head)))
+        Flow::ContinueWith(self.fold(path, inner, Some(head)))
     }
 
     /// Walk the body of a loop; returns the routes surviving it.
@@ -1073,7 +1115,7 @@ impl<'a> Walker<'a> {
         for conj in path {
             for r in self.decompose(node, conj.lits.clone(), false, false) {
                 let v = value_str(&r);
-                self.paths.push(PathOutcome {
+                self.push_path(PathOutcome {
                     line,
                     kind: kind.to_string(),
                     exprs: vec![v],
@@ -1084,10 +1126,43 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Account for `units` of work; false (and the result truncated) once
+    /// `MAX_WORK` is spent.
+    fn charge(&mut self, units: usize) -> bool {
+        self.work += units;
+        if self.work > MAX_WORK {
+            self.truncated = true;
+        }
+        !self.truncated
+    }
+
+    /// [`fold`], accounted for.
+    fn fold(&mut self, base: &PathSet, inner: Vec<Conj>, head: Option<StmtRef>) -> PathSet {
+        let cost = base.len() * inner.len() + Self::path_cost(&inner);
+        self.charge(cost);
+        fold(base, inner, head)
+    }
+
+    /// The cost of carrying a path set over one statement.
+    fn path_cost(path: &PathSet) -> usize {
+        path.iter().map(|c| 1 + c.lits.len() + c.stmts.len()).sum()
+    }
+
+    /// Record an outcome, unless the result is already at its bounds.
+    fn push_path(&mut self, p: PathOutcome) {
+        let refs: usize = p.stmts.iter().map(|s| 1 + s.when.len()).sum();
+        if self.paths.len() >= MAX_PATHS || self.stmt_refs + refs > MAX_STMT_REFS {
+            self.truncated = true;
+            return;
+        }
+        self.stmt_refs += refs;
+        self.paths.push(p);
+    }
+
     /// One outcome per conjunction of the path set.
     fn emit(&mut self, line: Option<u32>, kind: &str, exprs: Vec<String>, path: &PathSet) {
         for conj in path {
-            self.paths.push(PathOutcome {
+            self.push_path(PathOutcome {
                 line,
                 kind: kind.to_string(),
                 exprs: exprs.clone(),
@@ -1110,6 +1185,9 @@ impl<'a> Walker<'a> {
         let before = self.env.clone();
         let mut after = before.clone();
         for conj in path {
+            if !self.charge(1 + conj.lits.len() + conj.stmts.len()) {
+                break;
+            }
             self.env = before.clone();
             match test {
                 Test::Truth => {
@@ -1182,6 +1260,9 @@ impl<'a> Walker<'a> {
         neg: bool,
         operand: bool,
     ) -> Vec<Route> {
+        if !self.charge(1 + lits.len()) {
+            return Vec::new();
+        }
         let n = strip(node);
         match (n.name.as_str(), &n.kids[..]) {
             ("not", [k]) => self.decompose(k, lits, !neg, operand),

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::ir::SubIr;
 
-pub use env::{Env, Frame, arity_offset};
+pub use env::{Env, Frame, JoinLimits, arity_offset};
 pub use summary::{Assign, CallEvent, ForwardEvent, Precond, Read, ReadKind, Summary};
 pub use value::{Cond, Constraint, DefaultWhen, HashSeg, Key, Norm, Sym};
 
@@ -40,6 +40,22 @@ pub struct Limits {
     pub loop_iters: u32,
     /// Most keys a table lookup is split into.
     pub table_split: u32,
+    /// Most nodes of a joined or assigned value ([`Sym::size`]) before it
+    /// becomes unknown.
+    pub value_size: u32,
+    /// Total work: the size of the state copied at each fork (in value
+    /// nodes, see [`Sym::size`]). Bounds the time and memory of one
+    /// execution, which `steps` alone does not.
+    pub work: u64,
+}
+
+impl Limits {
+    pub fn join(&self) -> JoinLimits {
+        JoinLimits {
+            width: self.join_width,
+            size: self.value_size,
+        }
+    }
 }
 
 impl Default for Limits {
@@ -50,6 +66,8 @@ impl Default for Limits {
             inline_depth: 4,
             loop_iters: 64,
             table_split: 16,
+            value_size: 512,
+            work: 2_000_000,
         }
     }
 }

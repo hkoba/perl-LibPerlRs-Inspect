@@ -73,6 +73,17 @@ fn returns_list(name: &str) -> bool {
             | "leave"
             | "leavetry"
             | "return"
+            // builtins whose list value has a length that is not known
+            // (unknown ops are otherwise taken as one value)
+            | "each"
+            | "readline"
+            | "readdir"
+            | "localtime"
+            | "gmtime"
+            | "stat"
+            | "lstat"
+            | "unpack"
+            | "match"
     )
 }
 
@@ -147,6 +158,8 @@ pub(crate) struct Exec<'a> {
     src: &'a dyn IrSource,
     limits: &'a Limits,
     steps: u32,
+    /// Work spent so far (see [`Limits::work`]).
+    work: u64,
     env: Env,
     line: Option<u32>,
     dead: Option<Dead>,
@@ -173,6 +186,7 @@ impl<'a> Exec<'a> {
             src,
             limits,
             steps: 0,
+            work: 0,
             env: env.clone(),
             line: None,
             dead: None,
@@ -207,7 +221,7 @@ impl<'a> Exec<'a> {
                 self.sum.returns.push(v);
             }
         }
-        let width = self.limits.join_width;
+        let lim = self.limits.join();
         let mut fin: Option<Env> = if self.dead.is_none() {
             Some(self.env.clone())
         } else {
@@ -216,7 +230,7 @@ impl<'a> Exec<'a> {
         for e in std::mem::take(&mut self.ret_envs) {
             fin = Some(match fin {
                 None => e,
-                Some(a) => Env::join(a, e, &[], &[], width),
+                Some(a) => Env::join(a, e, &[], &[], lim),
             });
         }
         self.sum.env = fin.unwrap_or(self.env);
@@ -264,6 +278,32 @@ impl<'a> Exec<'a> {
 
     fn unknown(&mut self, op: &str) {
         self.sum.unknowns.push((op.to_string(), self.line));
+    }
+
+    /// Charge the work budget for a copy of the current state; false
+    /// (and the execution marked exhausted) once the budget is spent.
+    fn charge_env(&mut self) -> bool {
+        if self.sum.exhausted {
+            return false;
+        }
+        let mut left = (self.limits.work - self.work).min(usize::MAX as u64) as usize;
+        let before = left;
+        let ok = self
+            .env
+            .frames
+            .iter()
+            .all(|f| f.args.count(&mut left) && f.pads.values().all(|v| v.count(&mut left)))
+            && self.env.globals.values().all(|v| v.count(&mut left))
+            && self.env.conds.iter().all(|c| c.sym.count(&mut left));
+        // a state of n values costs at least n
+        let cost = (before - left).max(1) as u64;
+        self.work = (self.work + cost).min(self.limits.work);
+        if !ok || self.work >= self.limits.work {
+            self.sum.exhausted = true;
+            self.note("symexec budget exceeded".into());
+            return false;
+        }
+        true
     }
 
     fn note(&mut self, s: String) {
@@ -325,7 +365,9 @@ impl<'a> Exec<'a> {
                 .and_then(|f| f.pads.get(&targ))
                 .cloned()
                 .unwrap_or_else(Sym::undef),
-            Sym::Join(alts) => Sym::Join(alts.into_iter().map(|(c, s)| (c, self.resolve(s))).collect()),
+            Sym::Join(alts) => Sym::Join(Arc::new(
+                Arc::unwrap_or_clone(alts).into_iter().map(|(c, s)| (c, self.resolve(s))).collect(),
+            )),
             v => v,
         }
     }
@@ -336,7 +378,12 @@ impl<'a> Exec<'a> {
                 items: items.into_iter().map(|i| self.resolve(i)).collect(),
                 tail,
             },
-            Sym::Join(alts) => Sym::Join(alts.into_iter().map(|(c, s)| (c, self.resolve_list(s))).collect()),
+            Sym::Join(alts) => Sym::Join(Arc::new(
+                Arc::unwrap_or_clone(alts)
+                    .into_iter()
+                    .map(|(c, s)| (c, self.resolve_list(s)))
+                    .collect(),
+            )),
             l => l,
         }
     }
@@ -375,7 +422,17 @@ impl<'a> Exec<'a> {
         Some(list_elem(&self.env.top().args.clone(), ix))
     }
 
+    /// A value about to be stored, or `Unknown("size")` when it is larger
+    /// than [`Limits::value_size`]. Stores are where a value can grow
+    /// without bound: a loop that puts a copy of a variable into itself
+    /// (`$h{$k} = f(\%h)`) doubles it at each iteration.
+    fn capped(&self, v: Sym) -> Sym {
+        let cap = self.limits.value_size as usize;
+        if v.size(cap + 1) > cap { Sym::Unknown("size") } else { v }
+    }
+
     fn pad_set(&mut self, targ: u64, v: Sym, source: &'static str) {
+        let v = self.capped(v);
         self.env.top_mut().pads.insert(targ, v.clone());
         if self.at_top() {
             self.record_assign(targ, v, source);
@@ -436,6 +493,9 @@ impl<'a> Exec<'a> {
     pub(crate) fn eval(&mut self, n: &OpNode, want: Want) -> Sym {
         if self.dead.is_some() {
             return Sym::Unknown("dead");
+        }
+        if self.sum.exhausted {
+            return Sym::Unknown("budget");
         }
         self.steps += 1;
         if self.steps > self.limits.steps {
@@ -976,11 +1036,12 @@ impl<'a> Exec<'a> {
 
     fn deref(&self, r: Sym, sigil: char) -> Sym {
         match r {
-            Sym::Join(alts) => Sym::Join(
-                alts.into_iter()
+            Sym::Join(alts) => Sym::Join(Arc::new(
+                Arc::unwrap_or_clone(alts)
+                    .into_iter()
                     .map(|(c, s)| (c, self.deref(s, sigil)))
                     .collect(),
-            ),
+            )),
             Sym::Ref(x) => *x,
             Sym::RefPad { targ, .. } => self.pad_get(targ),
             Sym::Unknown(_) => r,
@@ -1071,6 +1132,7 @@ impl<'a> Exec<'a> {
     }
 
     fn array_set(&mut self, t: &ArrayTarget, v: Sym) {
+        let v = self.capped(v);
         match t {
             ArrayTarget::Args => self.env.top_mut().args = v,
             ArrayTarget::Pad(targ) => {
@@ -1268,11 +1330,12 @@ impl<'a> Exec<'a> {
     /// The container a reference value points at, for an element access.
     fn deref_container(&self, r: Sym, array: bool) -> Sym {
         match r {
-            Sym::Join(alts) => Sym::Join(
-                alts.into_iter()
+            Sym::Join(alts) => Sym::Join(Arc::new(
+                Arc::unwrap_or_clone(alts)
+                    .into_iter()
                     .map(|(c, s)| (c, self.deref_container(s, array)))
                     .collect(),
-            ),
+            )),
             Sym::Ref(x) => *x,
             Sym::RefPad { targ, .. } => self.pad_get(targ),
             Sym::Unknown(_) => r,
@@ -1289,6 +1352,7 @@ impl<'a> Exec<'a> {
         if let Some(raw) = self.raw_arg_elem(l) {
             if let Sym::Alias { frame, targ } = raw {
                 // an alias of the caller's variable: write through
+                let v = self.capped(v);
                 if let Some(f) = self.env.frames.get_mut(frame as usize) {
                     f.pads.insert(targ, v.clone());
                 }
@@ -1310,6 +1374,7 @@ impl<'a> Exec<'a> {
                     l.kids.first().and_then(|k| gv_of(k.skip_null()))
                 };
                 if let Some((nm, st)) = gv {
+                    let v = self.capped(v);
                     self.env.globals.insert(format!("${}::{}", st, nm), v);
                 }
             }
@@ -1384,7 +1449,8 @@ impl<'a> Exec<'a> {
             other => vec![HashSeg::Rest(other)],
         };
         segs.push(HashSeg::Pairs(vec![(k.to_string(), v)]));
-        self.env.top_mut().pads.insert(targ, Sym::Hash { segs });
+        let h = self.capped(Sym::Hash { segs });
+        self.env.top_mut().pads.insert(targ, h);
     }
 
     /// `$a[i] = v` on a pad array of known length.
@@ -1401,6 +1467,7 @@ impl<'a> Exec<'a> {
             }
             _ => Sym::Unknown("array"),
         };
+        let new = self.capped(new);
         self.env.top_mut().pads.insert(targ, new);
     }
 
@@ -1474,13 +1541,15 @@ impl<'a> Exec<'a> {
         if let Some(split) = table_split(&c, self.limits.table_split) {
             return self.fork_table(split, &mut then, &mut els);
         }
-        let width = self.limits.join_width;
+        if !self.charge_env() {
+            return Sym::Unknown("budget");
+        }
+        let lim = self.limits.join();
         let ct = Cond::new(c, true);
         let cf = ct.negate();
         let base = self.env.clone();
         let line = self.line;
         let outer_conditional = self.conditional();
-
         self.env.conds.push(ct.clone());
         self.refine(&ct);
         let vt = then(self);
@@ -1508,8 +1577,8 @@ impl<'a> Exec<'a> {
         }
         match (dt, df) {
             (None, None) => {
-                self.env = Env::join(et, ef, std::slice::from_ref(&ct), std::slice::from_ref(&cf), width);
-                join_syms(&[ct], vt, &[cf], vf, width)
+                self.env = Env::join(et, ef, std::slice::from_ref(&ct), std::slice::from_ref(&cf), lim);
+                join_syms(&[ct], vt, &[cf], vf, lim)
             }
             (None, Some(_)) => {
                 self.env = et;
@@ -1540,7 +1609,7 @@ impl<'a> Exec<'a> {
         then: &mut dyn FnMut(&mut Self) -> Sym,
         els: &mut dyn FnMut(&mut Self) -> Sym,
     ) -> Sym {
-        let width = self.limits.join_width;
+        let lim = self.limits.join();
         let base = self.env.clone();
         let line = self.line;
         let mut outs: Vec<(Vec<Cond>, Sym, Env)> = Vec::new();
@@ -1566,6 +1635,10 @@ impl<'a> Exec<'a> {
             )))
             .collect();
         for (k, constraint) in arms {
+            if !self.charge_env() {
+                self.env = base;
+                return Sym::Unknown("budget");
+            }
             self.env = base.clone();
             self.line = line;
             let general = Sym::Elem(split.list.clone(), Key::Any(constraint));
@@ -1595,8 +1668,8 @@ impl<'a> Exec<'a> {
             return Sym::Unknown("dead");
         };
         for (c2, v2, e2) in it {
-            val = join_syms(&cs, val, &c2, v2, width);
-            env = Env::join(env, e2, &cs, &c2, width);
+            val = join_syms(&cs, val, &c2, v2, lim);
+            env = Env::join(env, e2, &cs, &c2, lim);
             cs = Vec::new();
         }
         self.env = env;
@@ -1677,7 +1750,7 @@ impl<'a> Exec<'a> {
                                 Some(false) => break,
                                 Some(true) => {
                                     self.eval(&b.kids[1], Want::Scalar);
-                                    if self.dead.is_some() || self.sum.exhausted {
+                                    if self.dead.is_some() || !self.charge_env() {
                                         break;
                                     }
                                 }
@@ -1709,12 +1782,12 @@ impl<'a> Exec<'a> {
 
     /// Join the state after a loop body that may run zero times.
     fn after_loop_body(&mut self, base: Env) {
-        let width = self.limits.join_width;
+        let lim = self.limits.join();
         if self.dead.take().is_some() {
             self.env = base;
         } else {
             let after = std::mem::replace(&mut self.env, base.clone());
-            self.env = Env::join(after, base, &[], &[], width);
+            self.env = Env::join(after, base, &[], &[], lim);
         }
     }
 
@@ -1771,7 +1844,7 @@ impl<'a> Exec<'a> {
         };
         if let Some(b) = body {
             for item in items.into_iter().take(self.limits.loop_iters as usize) {
-                if self.dead.is_some() || self.sum.exhausted {
+                if self.dead.is_some() || !self.charge_env() {
                     break;
                 }
                 set_var(self, item);
@@ -1968,7 +2041,7 @@ impl<'a> Exec<'a> {
         if self.at_top() {
             self.top_call_line = self.line;
         }
-        let width = self.limits.join_width;
+        let lim = self.limits.join();
         let base_conds = self.env.conds.len();
         let line = self.line;
         self.env.frames.push(Frame {
@@ -2003,8 +2076,8 @@ impl<'a> Exec<'a> {
         for (v2, e2) in it {
             let ca: Vec<Cond> = env.conds.get(base_conds..).unwrap_or_default().to_vec();
             let cb: Vec<Cond> = e2.conds.get(base_conds..).unwrap_or_default().to_vec();
-            val = join_syms(&ca, val, &cb, v2, width);
-            env = Env::join(env, e2, &ca, &cb, width);
+            val = join_syms(&ca, val, &cb, v2, lim);
+            env = Env::join(env, e2, &ca, &cb, lim);
         }
         env.frames.pop();
         env.conds.truncate(base_conds);
@@ -2329,7 +2402,7 @@ fn substitute(s: &Sym, from: &Sym, to: &Sym) -> Sym {
             args: args.iter().map(sub).collect(),
             method: *method,
         },
-        Sym::Join(alts) => Sym::Join(alts.iter().map(|(c, x)| (c.clone(), sub(x))).collect()),
+        Sym::Join(alts) => Sym::Join(Arc::new(alts.iter().map(|(c, x)| (c.clone(), sub(x))).collect())),
         other => other.clone(),
     }
 }

@@ -2,8 +2,18 @@
 //! values and join points.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::value::{Cond, DefaultWhen, HashSeg, Key, Sym};
+
+/// Bounds on a merged value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JoinLimits {
+    /// Most alternatives.
+    pub width: u32,
+    /// Most nodes ([`Sym::size`]).
+    pub size: u32,
+}
 
 /// The pads and `@_` of one sub activation.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,7 +61,7 @@ impl Env {
     /// Merge the states of two paths that meet again. `ca` / `cb` are the
     /// conditions that led to each path (the alternatives of a merged
     /// value carry them).
-    pub fn join(a: Env, b: Env, ca: &[Cond], cb: &[Cond], width: u32) -> Env {
+    pub fn join(a: Env, b: Env, ca: &[Cond], cb: &[Cond], lim: JoinLimits) -> Env {
         let conds = common_prefix(&a.conds, &b.conds);
         let mut frames = Vec::new();
         for (fa, fb) in a.frames.into_iter().zip(b.frames) {
@@ -63,9 +73,9 @@ impl Env {
                 }
                 let va = fa.pads.get(&k).cloned().unwrap_or_else(Sym::undef);
                 let vb = fb.pads.get(&k).cloned().unwrap_or_else(Sym::undef);
-                pads.insert(k, join_syms(ca, va, cb, vb, width));
+                pads.insert(k, join_syms(ca, va, cb, vb, lim));
             }
-            let args = join_args(ca, fa.args, cb, fb.args, width);
+            let args = join_args(ca, fa.args, cb, fb.args, lim);
             frames.push(Frame {
                 pads,
                 args,
@@ -80,7 +90,7 @@ impl Env {
             }
             let va = a.globals.get(&k).cloned().unwrap_or(Sym::Unknown("global"));
             let vb = b.globals.get(&k).cloned().unwrap_or(Sym::Unknown("global"));
-            globals.insert(k, join_syms(ca, va, cb, vb, width));
+            globals.insert(k, join_syms(ca, va, cb, vb, lim));
         }
         Env {
             frames,
@@ -101,21 +111,22 @@ fn common_prefix(a: &[Cond], b: &[Cond]) -> Vec<Cond> {
 /// `@_` at a join point. A list known to be empty (the false arm of
 /// `if (@_)`) also stands for the rest of the arguments after any number
 /// of further shifts, so it merges into the other path's rest.
-fn join_args(ca: &[Cond], a: Sym, cb: &[Cond], b: Sym, width: u32) -> Sym {
+fn join_args(ca: &[Cond], a: Sym, cb: &[Cond], b: Sym, lim: JoinLimits) -> Sym {
     if a == Sym::empty() && b.as_arg_slice().is_some() {
         return b;
     }
     if b == Sym::empty() && a.as_arg_slice().is_some() {
         return a;
     }
-    join_syms(ca, a, cb, b, width)
+    join_syms(ca, a, cb, b, lim)
 }
 
 /// Merge two values. Equal values stay as they are; otherwise the result
 /// is a [`Sym::Join`] of the alternatives (flattened, deduplicated,
-/// `Unknown("join")` beyond `width`), normalized to a [`Sym::Default`]
-/// where it is the shape of a default.
-pub fn join_syms(ca: &[Cond], a: Sym, cb: &[Cond], b: Sym, width: u32) -> Sym {
+/// `Unknown("join")` beyond `lim.width` alternatives or `lim.size`
+/// nodes), normalized to a [`Sym::Default`] where it is the shape of a
+/// default.
+pub fn join_syms(ca: &[Cond], a: Sym, cb: &[Cond], b: Sym, lim: JoinLimits) -> Sym {
     if a == b {
         return a;
     }
@@ -123,7 +134,7 @@ pub fn join_syms(ca: &[Cond], a: Sym, cb: &[Cond], b: Sym, width: u32) -> Sym {
     for (conds, s) in [(ca, a), (cb, b)] {
         match s {
             Sym::Join(inner) => {
-                for (ic, is) in inner {
+                for (ic, is) in Arc::unwrap_or_clone(inner) {
                     let mut c = conds.to_vec();
                     c.extend(ic);
                     push_alt(&mut alts, c, is);
@@ -135,10 +146,18 @@ pub fn join_syms(ca: &[Cond], a: Sym, cb: &[Cond], b: Sym, width: u32) -> Sym {
     if alts.len() == 1 {
         return alts.pop().unwrap().1;
     }
-    if alts.len() > width as usize {
+    if alts.len() > lim.width as usize {
         return Sym::Unknown("join");
     }
-    normalize_default(&alts).unwrap_or(Sym::Join(alts))
+    let v = normalize_default(&alts).unwrap_or_else(|| Sym::Join(Arc::new(alts)));
+    // Each alternative carries the conditions it holds under, and those
+    // conditions may test joined values in turn: without a bound a chain
+    // of branches on a joined value (`shift @list` under `if (@list)`)
+    // doubles the value at every join.
+    if v.size(lim.size as usize + 1) > lim.size as usize {
+        return Sym::Unknown("join");
+    }
+    v
 }
 
 fn push_alt(alts: &mut Vec<(Vec<Cond>, Sym)>, conds: Vec<Cond>, s: Sym) {
@@ -276,7 +295,7 @@ fn join_of(alts: Vec<(Vec<Cond>, Sym)>) -> Sym {
     if out.len() == 1 {
         out.pop().unwrap().1
     } else {
-        normalize_default(&out).unwrap_or(Sym::Join(out))
+        normalize_default(&out).unwrap_or_else(|| Sym::Join(Arc::new(out)))
     }
 }
 
@@ -420,7 +439,7 @@ pub fn list_concat(parts: Vec<Sym>) -> Sym {
 pub fn to_hash(l: &Sym) -> Sym {
     match l {
         Sym::Hash { .. } => l.clone(),
-        Sym::Join(alts) => Sym::Join(alts.iter().map(|(c, s)| (c.clone(), to_hash(s))).collect()),
+        Sym::Join(alts) => Sym::Join(Arc::new(alts.iter().map(|(c, s)| (c.clone(), to_hash(s))).collect())),
         _ => {
             let (items, tail) = view(l);
             let mut segs = Vec::new();
